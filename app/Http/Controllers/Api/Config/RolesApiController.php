@@ -222,7 +222,7 @@ class RolesApiController extends Controller
 
     public function tablaTodosPermisos(){
 
-        $permisos = Permission::select('id', 'name', 'guard_name')->orderBy('name')->get();
+        $permisos = Permission::orderBy('name')->get();
 
         return [
             'success' => 1,

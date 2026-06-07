@@ -2,8 +2,10 @@
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
-
 use App\Http\Controllers\Api\Login\LoginApiController;
+use App\Http\Controllers\Api\Auth\AuthApiController;
+use App\Http\Controllers\Api\Auth\DashboardApiController;
+use App\Http\Controllers\Api\Config\RolesApiController;
 
 
 
@@ -19,7 +21,26 @@ Route::middleware('auth:sanctum')->group(function () {
     // Cerrar sesión
     Route::post('/logout', [LoginApiController::class, 'logout']);
 
+    // Usuario autenticado + roles + permisos (CLAVE)
+    Route::get('/me', [AuthApiController::class, 'me']);
 
+    // Información del usuario autenticado
+    Route::get('/datos', [DashboardApiController::class, 'datos']);
+
+    // ROLES Y PERMISOS
+    Route::get('/admin/roles/tabla', [RolesApiController::class,'listadoRoles']);
+    Route::post('/admin/roles/borrar-global', [RolesApiController::class, 'borrarRolGlobal']);
+    Route::get('/admin/roles/permisos/tabla/{id}', [RolesApiController::class,'tablaRolesPermisos']);
+    Route::post('/admin/roles/permiso/borrar', [RolesApiController::class, 'borrarPermiso']);
+    Route::post('/admin/roles/nuevo-rol', [RolesApiController::class, 'nuevoRol']);
+    Route::post('/admin/roles/permiso/agregar', [RolesApiController::class, 'agregarPermiso']);
+    Route::get('/admin/roles/permisos-todos/tabla', [RolesApiController::class,'tablaTodosPermisos']);
+    Route::post('/admin/permisos/extra-borrar', [RolesApiController::class, 'borrarPermisoGlobal']);
+    Route::post('/admin/permisos/extra-nuevo', [RolesApiController::class, 'nuevoPermisoExtra']);
+    Route::get('/admin/usuarios/tabla', [RolesApiController::class,'tablaUsuarios']);
+    Route::post('/admin/permisos/nuevo-usuario', [RolesApiController::class, 'nuevoUsuario']);
+    Route::post('/admin/informacion/administrador', [RolesApiController::class, 'informacionAdministrador']);
+    Route::put('/admin/actualizar/administrador/{id}', [RolesApiController::class, 'actualizarAdministrador']);
 
 
 });

@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\Auth\AuthApiController;
 use App\Http\Controllers\Api\Auth\DashboardApiController;
 use App\Http\Controllers\Api\Config\RolesApiController;
 use App\Http\Controllers\Api\Config\ConfiguracionApiController;
+use App\Http\Controllers\Api\Productos\ProductosApiController;
 
 
 
@@ -20,6 +21,10 @@ Route::post('/admin/enviar/correo/password', [LoginApiController::class, 'enviar
 Route::post('/printer/test',   [ConfiguracionApiController::class, 'testPrint']);
 Route::post('/printer/venta',  [ConfiguracionApiController::class, 'imprimirVenta']);
 
+Route::post('/productos/registro', [ProductosApiController::class, 'registrarProducto']);
+Route::get('/productos/tabla', [ProductosApiController::class, 'tablaProductos']);
+Route::get('/productos/editar/{id}', [ProductosApiController::class, 'mostrarProducto']);
+Route::post('/productos/actualizar/{id}', [ProductosApiController::class, 'actualizarProducto']);
 
 // Rutas protegidas (requieren token)
 Route::middleware('auth:sanctum')->group(function () {
@@ -58,6 +63,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/admin/unidadmedida/tabla', [ConfiguracionApiController::class,'tablaUnidadMedida']);
     Route::post('/admin/unidadmedida/nuevo', [ConfiguracionApiController::class, 'registrarUnidadMedida']);
     Route::put('/admin/unidadmedida/actualizar/{id}', [ConfiguracionApiController::class, 'actualizarUnidadMedida']);
+
+
+
 
 
 

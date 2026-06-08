@@ -12,4 +12,6 @@ class Categoria extends Model
         'nombre',
         'estado',
     ];
+
+
 }

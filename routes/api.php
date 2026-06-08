@@ -16,6 +16,11 @@ Route::post('/validate-reset-token', [LoginApiController::class, 'validateResetT
 Route::post('/reset-password-confirm', [LoginApiController::class, 'resetPasswordConfirm']);
 Route::post('/admin/enviar/correo/password', [LoginApiController::class, 'enviarCorreoAdministrador']);
 
+
+Route::post('/printer/test',   [ConfiguracionApiController::class, 'testPrint']);
+Route::post('/printer/venta',  [ConfiguracionApiController::class, 'imprimirVenta']);
+
+
 // Rutas protegidas (requieren token)
 Route::middleware('auth:sanctum')->group(function () {
 
@@ -53,6 +58,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/admin/unidadmedida/tabla', [ConfiguracionApiController::class,'tablaUnidadMedida']);
     Route::post('/admin/unidadmedida/nuevo', [ConfiguracionApiController::class, 'registrarUnidadMedida']);
     Route::put('/admin/unidadmedida/actualizar/{id}', [ConfiguracionApiController::class, 'actualizarUnidadMedida']);
+
+
 
 
 

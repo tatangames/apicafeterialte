@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\Auth\DashboardApiController;
 use App\Http\Controllers\Api\Config\RolesApiController;
 use App\Http\Controllers\Api\Config\ConfiguracionApiController;
 use App\Http\Controllers\Api\Productos\ProductosApiController;
+use App\Http\Controllers\Api\Productos\InventarioApiController;
 
 
 
@@ -25,6 +26,11 @@ Route::post('/productos/registro', [ProductosApiController::class, 'registrarPro
 Route::get('/productos/tabla', [ProductosApiController::class, 'tablaProductos']);
 Route::get('/productos/editar/{id}', [ProductosApiController::class, 'mostrarProducto']);
 Route::post('/productos/actualizar/{id}', [ProductosApiController::class, 'actualizarProducto']);
+
+Route::get('/inventario/stock',                [InventarioApiController::class, 'stock']);
+Route::get('/inventario/entradas',             [InventarioApiController::class, 'listarEntradas']);
+Route::get('/inventario/entradas/{id}',        [InventarioApiController::class, 'mostrarEntrada']);
+Route::post('/inventario/entradas/registrar',  [InventarioApiController::class, 'registrarEntrada']);
 
 // Rutas protegidas (requieren token)
 Route::middleware('auth:sanctum')->group(function () {

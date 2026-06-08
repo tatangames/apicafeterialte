@@ -59,4 +59,14 @@ class Producto extends Model
     {
         return in_array($this->tipo, [self::TIPO_SERVICIO, self::TIPO_BIEN_SERVICIO]);
     }
+
+    public function inventario()
+    {
+        return $this->hasOne(Inventario::class);
+    }
+
+    public function movimientos()
+    {
+        return $this->hasMany(MovimientoInventario::class);
+    }
 }

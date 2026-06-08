@@ -9,6 +9,8 @@ use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use App\Models\Inventario;
+use App\Services\InventarioService;
 
 class ProductosApiController extends Controller
 {

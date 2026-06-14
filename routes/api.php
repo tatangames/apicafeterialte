@@ -70,11 +70,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/admin/unidadmedida/nuevo', [ConfiguracionApiController::class, 'registrarUnidadMedida']);
     Route::put('/admin/unidadmedida/actualizar/{id}', [ConfiguracionApiController::class, 'actualizarUnidadMedida']);
 
-
-
-
-
-
-
+    // IMPRESORAS
+    Route::get('/admin/impresora/index',                    [ConfiguracionApiController::class, 'indexImpresora']);
+    Route::post('/admin/impresora/store',                   [ConfiguracionApiController::class, 'nuevaImpresora']);
+    Route::get('/admin/impresora/{impresora}',              [ConfiguracionApiController::class, 'showImpresora']);
+    Route::post('/admin/impresora/{impresora}/update',      [ConfiguracionApiController::class, 'updateImpresora']);
+    Route::delete('/admin/impresora/{impresora}/destroy',   [ConfiguracionApiController::class, 'borrarImpresora']);
+    Route::post('/admin/impresora/{impresora}/test', [ConfiguracionApiController::class, 'testPrint']);
 
 });

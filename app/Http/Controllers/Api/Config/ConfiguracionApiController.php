@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\Config;
 
 use App\Http\Controllers\Controller;
 use App\Models\Categoria;
+use App\Models\Impresora;
 use App\Models\UnidadesMedida;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -188,93 +189,159 @@ class ConfiguracionApiController extends Controller
 
 
 
-    private string $printerName = 'STAR1';
-    private string $fontName    = 'Consolas';
-    private float  $fontSize    = 11;   // sube/baja el tamaño aquí
-    private int    $width       = 32;   // columnas aprox. para Consolas 11pt en 80mm
+    // ================================ IMPRESORA ==============================
 
-    public function testPrint()
+
+    // GET /admin/impresora/index
+    public function indexImpresora()
     {
-        return $this->imprimir($this->ticketPrueba());
+        $impresoras = Impresora::with('categorias')
+            ->orderBy('alias')
+            ->get();
+
+        return response()->json([
+            'data' => $impresoras,
+        ]);
     }
 
-    private function centrar(string $texto): string
+    // POST /admin/impresora/store
+    public function nuevaImpresora(Request $request)
     {
-        $espacios = max(0, intval(($this->width - mb_strlen($texto)) / 2));
-        return str_repeat(' ', $espacios) . $texto . "\r\n";
+        $request->validate([
+            'alias'          => 'required|string|max:200',
+            'ip_impresora'   => 'required|string|max:50',
+            'ip_servidor'    => 'required|string|max:50',
+            'tipo_impresion' => 'required|in:escpos',
+            'cash_drawer'    => 'required|in:ninguno,pin2,pin5',
+            'activo'         => 'boolean',
+            'categorias'     => 'required|array|min:1',
+            'categorias.*'   => 'exists:categorias,id',
+        ]);
+
+        $impresora = Impresora::create($request->only([
+            'alias', 'ip_impresora', 'ip_servidor',
+            'tipo_impresion', 'cash_drawer', 'activo',
+        ]));
+        $impresora->categorias()->sync($request->categorias);
+
+        return response()->json([
+            'message' => 'Impresora registrada correctamente.',
+            'data'    => $impresora->load('categorias'),
+        ], 201);
     }
 
-    private function separador(): string
+    // GET /admin/impresora/{impresora}
+    public function showImpresora(Impresora $impresora)
     {
-        return str_repeat('-', $this->width) . "\r\n";
+        return response()->json([
+            'data' => $impresora->load('categorias'),
+        ]);
     }
 
-    private function ticketPrueba(): string
+    // POST /admin/impresora/{impresora}/update
+    public function updateImpresora(Request $request, Impresora $impresora)
     {
-        $t  = $this->separador();
-        $t .= $this->centrar('CAFETERIA EDUARDO');
-        $t .= $this->centrar('Tel: 0000-0000');
-        $t .= $this->separador();
-        $t .= $this->centrar('PRUEBA DE IMPRESION');
-        $t .= $this->separador();
-        $t .= "Fecha    : " . now()->format('d/m/Y') . "\r\n";
-        $t .= "Hora     : " . now()->format('H:i:s') . "\r\n";
-        $t .= "Impresora: " . $this->printerName . "\r\n";
-        $t .= $this->separador();
-        $t .= $this->centrar('Impresion correcta!');
-        $t .= $this->separador();
-        $t .= "\r\n\r\n\r\n";
-        return $t;
+        $request->validate([
+            'alias'          => 'required|string|max:200',
+            'ip_impresora'   => 'required|string|max:50',
+            'ip_servidor'    => 'required|string|max:50',
+            'tipo_impresion' => 'required|in:escpos',
+            'cash_drawer'    => 'required|in:ninguno,pin2,pin5',
+            'activo'         => 'boolean',
+            'categorias'     => 'required|array|min:1',
+            'categorias.*'   => 'exists:categorias,id',
+        ]);
+
+        $impresora->update($request->only([
+            'alias', 'ip_impresora', 'ip_servidor',
+            'tipo_impresion', 'cash_drawer', 'activo',
+        ]));
+        $impresora->categorias()->sync($request->categorias);
+
+        return response()->json([
+            'message' => 'Impresora actualizada correctamente.',
+            'data'    => $impresora->load('categorias'),
+        ]);
     }
 
-    private function imprimir(string $contenido): \Illuminate\Http\JsonResponse
+    // DELETE /admin/impresora/{impresora}/destroy
+    public function borrarImpresora(Impresora $impresora)
     {
-        // 1) Guardamos el ticket en UTF-8 con BOM (para que PowerShell lea bien los acentos/ñ)
+        $impresora->delete();
+
+        return response()->json([
+            'message' => 'Impresora eliminada correctamente.',
+        ]);
+    }
+
+
+
+    public function testPrint(Impresora $impresora)
+    {
+        $printerName = 'STAR1';
+        $fontName    = 'Consolas';
+        $fontSize    = 11;
+        $width       = 32;
+
+        $centrar = function (string $texto) use ($width): string {
+            $espacios = max(0, intval(($width - mb_strlen($texto)) / 2));
+            return str_repeat(' ', $espacios) . $texto . "\r\n";
+        };
+
+        $separador = str_repeat('-', $width) . "\r\n";
+
+        $contenido  = $separador;
+        $contenido .= $centrar('CAFETERIA EDUARDO');
+        $contenido .= $centrar('Tel: 0000-0000');
+        $contenido .= $separador;
+        $contenido .= $centrar('PRUEBA DE IMPRESION');
+        $contenido .= $separador;
+        $contenido .= "Fecha    : " . now()->format('d/m/Y') . "\r\n";
+        $contenido .= "Hora     : " . now()->format('H:i:s') . "\r\n";
+        $contenido .= "Impresora: " . $impresora->alias . "\r\n";
+        $contenido .= "IP       : " . $impresora->ip_impresora . "\r\n";
+        $contenido .= $separador;
+        $contenido .= $centrar('Impresion correcta!');
+        $contenido .= $separador;
+        $contenido .= "\r\n\r\n\r\n";
+
+        // Guardar ticket en archivo temporal
         $tmpTxt = 'C:\\Windows\\Temp\\ticket_' . time() . '.txt';
         file_put_contents($tmpTxt, "\xEF\xBB\xBF" . $contenido);
 
-        // 2) Generamos un script PowerShell que dibuja el texto: negrita, tamaño y SIN margenes
+        // Script PowerShell
         $ps1 = 'C:\\Windows\\Temp\\print_' . time() . '.ps1';
-
         $script = <<<PS
-Add-Type -AssemblyName System.Drawing
-
-\$texto  = Get-Content -LiteralPath '$tmpTxt' -Raw -Encoding UTF8
-\$lineas = \$texto -split "`r`n"
-
-\$pd = New-Object System.Drawing.Printing.PrintDocument
-\$pd.PrinterSettings.PrinterName = '{$this->printerName}'
-\$pd.DocumentName = 'Ticket'
-
-# Margenes en 0 -> el texto sale pegado al borde, no en el centro
-\$pd.DefaultPageSettings.Margins = New-Object System.Drawing.Printing.Margins(0,0,0,0)
-
-\$fuente = New-Object System.Drawing.Font('{$this->fontName}', {$this->fontSize}, [System.Drawing.FontStyle]::Bold)
-
-\$global:idx = 0
-\$pd.add_PrintPage({
-    param(\$sender, \$e)
-    \$y  = 0
-    \$lh = \$fuente.GetHeight(\$e.Graphics)
-    while (\$global:idx -lt \$lineas.Length) {
-        \$e.Graphics.DrawString(\$lineas[\$global:idx], \$fuente, [System.Drawing.Brushes]::Black, 0, \$y)
-        \$y += \$lh
-        \$global:idx++
-    }
-    \$e.HasMorePages = \$false
-})
-
-try {
-    \$pd.Print()
-    Write-Output 'OK'
-} catch {
-    Write-Output ("ERROR: " + \$_.Exception.Message)
-}
-PS;
+        Add-Type -AssemblyName System.Drawing
+        \$texto  = Get-Content -LiteralPath '$tmpTxt' -Raw -Encoding UTF8
+        \$lineas = \$texto -split "`r`n"
+        \$pd = New-Object System.Drawing.Printing.PrintDocument
+        \$pd.PrinterSettings.PrinterName = '$printerName'
+        \$pd.DocumentName = 'Ticket'
+        \$pd.DefaultPageSettings.Margins = New-Object System.Drawing.Printing.Margins(0,0,0,0)
+        \$fuente = New-Object System.Drawing.Font('$fontName', $fontSize, [System.Drawing.FontStyle]::Bold)
+        \$global:idx = 0
+        \$pd.add_PrintPage({
+            param(\$sender, \$e)
+            \$y  = 0
+            \$lh = \$fuente.GetHeight(\$e.Graphics)
+            while (\$global:idx -lt \$lineas.Length) {
+                \$e.Graphics.DrawString(\$lineas[\$global:idx], \$fuente, [System.Drawing.Brushes]::Black, 0, \$y)
+                \$y += \$lh
+                \$global:idx++
+            }
+            \$e.HasMorePages = \$false
+        })
+        try {
+            \$pd.Print()
+            Write-Output 'OK'
+        } catch {
+            Write-Output ("ERROR: " + \$_.Exception.Message)
+        }
+        PS;
 
         file_put_contents($ps1, $script);
 
-        // 3) Ejecutamos el script
         $cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' . $ps1 . '"';
         exec($cmd, $output, $code);
 
@@ -289,6 +356,9 @@ PS;
             'output'  => $output,
         ]);
     }
+
+
+
 
 
 

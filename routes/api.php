@@ -18,10 +18,6 @@ Route::post('/validate-reset-token', [LoginApiController::class, 'validateResetT
 Route::post('/reset-password-confirm', [LoginApiController::class, 'resetPasswordConfirm']);
 Route::post('/admin/enviar/correo/password', [LoginApiController::class, 'enviarCorreoAdministrador']);
 
-
-Route::post('/printer/test',   [ConfiguracionApiController::class, 'testPrint']);
-Route::post('/printer/venta',  [ConfiguracionApiController::class, 'imprimirVenta']);
-
 Route::post('/productos/registro', [ProductosApiController::class, 'registrarProducto']);
 Route::get('/productos/tabla', [ProductosApiController::class, 'tablaProductos']);
 Route::get('/productos/editar/{id}', [ProductosApiController::class, 'mostrarProducto']);
@@ -76,6 +72,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/admin/impresora/{impresora}',              [ConfiguracionApiController::class, 'showImpresora']);
     Route::post('/admin/impresora/{impresora}/update',      [ConfiguracionApiController::class, 'updateImpresora']);
     Route::delete('/admin/impresora/{impresora}/destroy',   [ConfiguracionApiController::class, 'borrarImpresora']);
-    Route::post('/admin/impresora/{impresora}/test', [ConfiguracionApiController::class, 'testPrint']);
+    Route::post('/admin/impresora/{impresora}/test',        [ConfiguracionApiController::class, 'testPrintImpresoraReal']);
+
+    // PROVEEDORES
+    Route::get('/admin/proveedores/tabla', [ConfiguracionApiController::class, 'indexProveedores']);
+    Route::post('/admin/proveedores/nuevo', [ConfiguracionApiController::class, 'storeProveedores']);
+    Route::put('/admin/proveedores/actualizar/{proveedor}', [ConfiguracionApiController::class, 'updateProveedores']);
+
+
 
 });

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Config;
 use App\Http\Controllers\Controller;
 use App\Models\Categoria;
 use App\Models\Impresora;
+use App\Models\Proveedor;
 use App\Models\UnidadesMedida;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -275,10 +276,9 @@ class ConfiguracionApiController extends Controller
     }
 
 
-
-    public function testPrint(Impresora $impresora)
+    public function testPrintImpresoraReal(Impresora $impresora)
     {
-        $printerName = 'STAR1';
+        $printerName = 'STAR1';  // Nombre del driver en el spooler de Windows
         $fontName    = 'Consolas';
         $fontSize    = 11;
         $width       = 32;
@@ -303,6 +303,14 @@ class ConfiguracionApiController extends Controller
         $contenido .= $separador;
         $contenido .= $centrar('Impresion correcta!');
         $contenido .= $separador;
+
+        // Comando ESC/POS para abrir cajón (se agrega antes de los saltos finales)
+        $cajon = match ($impresora->cash_drawer) {
+            'pin2' => "\x1B\x70\x00\x19\xFA",
+            'pin5' => "\x1B\x70\x01\x19\xFA",
+            default => '',
+        };
+        $contenido .= $cajon;
         $contenido .= "\r\n\r\n\r\n";
 
         // Guardar ticket en archivo temporal
@@ -359,6 +367,42 @@ class ConfiguracionApiController extends Controller
 
 
 
+    public function indexProveedores(Request $request)
+    {
+        $proveedores = Proveedor::when($request->search, fn($q, $s) =>
+        $q->where('nombre', 'like', "%$s%")
+        )
+            ->orderBy('nombre')
+            ->get();
+
+        return response()->json($proveedores);
+    }
+
+    public function storeProveedores(Request $request)
+    {
+        $data = $request->validate([
+            'nombre' => 'required|string|max:200',
+            'notas'  => 'nullable|string',
+            'activo' => 'boolean',
+        ]);
+
+        $proveedor = Proveedor::create($data);
+
+        return response()->json($proveedor, 201);
+    }
+
+    public function updateProveedores(Request $request, Proveedor $proveedor)
+    {
+        $data = $request->validate([
+            'nombre' => 'required|string|max:200',
+            'notas'  => 'nullable|string',
+            'activo' => 'boolean',
+        ]);
+
+        $proveedor->update($data);
+
+        return response()->json($proveedor);
+    }
 
 
 

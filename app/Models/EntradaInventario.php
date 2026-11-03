@@ -2,10 +2,13 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\RegistraTurno;
 use Illuminate\Database\Eloquent\Model;
 
 class EntradaInventario extends Model
 {
+    use RegistraTurno;
+
     protected $table = 'entradas_inventario';
 
     protected $fillable = [
@@ -13,6 +16,7 @@ class EntradaInventario extends Model
         'tipo',
         'descripcion',
         'usuario_id',
+        'autorizado_por',
     ];
 
     protected $casts = [
@@ -26,6 +30,11 @@ class EntradaInventario extends Model
 
     public function usuario()
     {
-        return $this->belongsTo(User::class, 'usuario_id');
+        return $this->belongsTo(Administrador::class, 'usuario_id');
+    }
+
+    public function autorizadoPor()
+    {
+        return $this->belongsTo(Administrador::class, 'autorizado_por');
     }
 }

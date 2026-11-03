@@ -4,7 +4,6 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class Impresora extends Model
 {
@@ -14,24 +13,35 @@ class Impresora extends Model
 
     protected $fillable = [
         'alias',
+        'conexion',
         'ip_impresora',
+        'puerto',
+        'nombre_windows',
         'ip_servidor',
         'tipo_impresion',
+        'ancho_caracteres',
+        'uso',
+        'predeterminada',
+        'cortar_papel',
         'cash_drawer',
         'activo',
     ];
 
     protected $casts = [
-        'activo' => 'boolean',
+        'activo'           => 'boolean',
+        'predeterminada'   => 'boolean',
+        'cortar_papel'     => 'boolean',
+        'puerto'           => 'integer',
+        'ancho_caracteres' => 'integer',
     ];
 
-    public function categorias(): BelongsToMany
+    public function imprimeTickets(): bool
     {
-        return $this->belongsToMany(
-            Categoria::class,
-            'impresoras_categorias',  // tu tabla pivote
-            'impresora_id',
-            'categoria_id'
-        );
+        return in_array($this->uso, ['ticket', 'ambos'], true);
+    }
+
+    public function imprimeComandas(): bool
+    {
+        return in_array($this->uso, ['comanda', 'ambos'], true);
     }
 }

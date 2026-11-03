@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Facades\Validator;
+use App\Services\AuditoriaService;
 
 class LoginApiController extends Controller
 {
@@ -23,27 +24,33 @@ class LoginApiController extends Controller
 
         $user = Administrador::where('email', $request->email)->first();
 
-        // Si el correo no existe
-        if (!$user) {
+        // Mismo mensaje si el correo no existe o la contraseña es incorrecta,
+        // para no revelar qué correos están registrados
+        if (!$user || !Hash::check($request->password, $user->password)) {
+            AuditoriaService::registrar('auth', 'login_fallido', $user, null, null, 'Correo: ' . $request->email, $user?->id);
+
             return response()->json([
                 'success' => false,
-                'status' => 'EMAIL_NOT_FOUND',
-                'message' => 'El correo electrónico no está Registrado.',
+                'status' => 'INVALID_CREDENTIALS',
+                'message' => 'Correo o contraseña incorrectos.',
             ], 401);
         }
 
-        // Si la contraseña es incorrecta
-        if (!Hash::check($request->password, $user->password)) {
+        if (!$user->estado) {
             return response()->json([
                 'success' => false,
-                'status' => 'INVALID_PASSWORD',
-                'message' => 'La contraseña es incorrecta.',
-            ], 401);
+                'status' => 'USER_INACTIVE',
+                'message' => 'Tu usuario está desactivado. Contacta al administrador.',
+            ], 403);
         }
 
         // Login exitoso - continúa con el token
         $deviceName = $request->device_name ?? 'default';
         $token = $user->createToken($deviceName)->plainTextToken;
+
+        $user->forceFill(['ultimo_acceso' => now()])->save();
+
+        AuditoriaService::registrar('auth', 'login', $user, null, ['dispositivo' => $deviceName], null, $user->id);
 
         return response()->json([
             'success' => true,
@@ -57,6 +64,8 @@ class LoginApiController extends Controller
     // Métod protegido (requiere autenticación)
     public function logout(Request $request)
     {
+        AuditoriaService::registrar('auth', 'logout', $request->user());
+
         // Eliminar el token actual
         $request->user()->currentAccessToken()->delete();
 

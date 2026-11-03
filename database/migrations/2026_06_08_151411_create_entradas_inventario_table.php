@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration
 {
     /**
-     * Run the migrations.
+     * REGISTRO DE INVENTARIO
      */
     public function up(): void
     {
@@ -17,6 +17,8 @@ return new class extends Migration
             $table->enum('tipo', ['entrada', 'salida', 'ajuste', 'produccion', 'venta']);
             $table->string('descripcion', 500)->nullable();
             $table->foreignId('usuario_id')->nullable()->constrained('administradores')->nullOnDelete();
+            // Quién autorizó una salida o un ajuste a la baja de un insumo de receta
+            $table->foreignId('autorizado_por')->nullable()->constrained('administradores');
             $table->timestamps();
         });
     }

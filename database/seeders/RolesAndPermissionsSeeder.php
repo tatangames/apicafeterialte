@@ -58,5 +58,26 @@ class RolesAndPermissionsSeeder extends Seeder
             'description' => 'Sidebar dashboard para editor',
         ])->syncRoles([$roleEditor]);
 
+        /*
+        |--------------------------------------------------------------------------
+        | Permisos por módulo (config/permisos.php)
+        |--------------------------------------------------------------------------
+        */
+
+        foreach (config('permisos.permisos') as $nombre => $descripcion) {
+            Permission::updateOrCreate(
+                ['name' => $nombre, 'guard_name' => 'api'],
+                ['description' => $descripcion]
+            );
+        }
+
+        // Roles base de la panadería. Solo se agregan permisos: si el administrador
+        // ajustó un rol desde el sistema, volver a correr el seeder no se los quita.
+        foreach (config('permisos.roles') as $rol => $permisos) {
+            Role::firstOrCreate(['name' => $rol, 'guard_name' => 'api'])
+                ->givePermissionTo($permisos);
+        }
+
+        app()[PermissionRegistrar::class]->forgetCachedPermissions();
     }
 }

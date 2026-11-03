@@ -22,7 +22,8 @@ class Administrador extends Authenticatable
         'nombre',
         'email',
         'password',
-        'estado'
+        'estado',
+        'ultimo_acceso',
     ];
 
     protected $hidden = [
@@ -33,6 +34,8 @@ class Administrador extends Authenticatable
     protected $casts = [
         'email_verified_at' => 'datetime',
         'password' => 'hashed',
+        'estado' => 'boolean',
+        'ultimo_acceso' => 'datetime',
     ];
 
     public function sendPasswordResetNotification($token)

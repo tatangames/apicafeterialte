@@ -14,18 +14,19 @@ class AdminSeeder extends Seeder
      */
     public function run(): void
     {
-        Administrador::create([
+        Administrador::firstOrCreate(['email' => 'tatangamess@gmail.com'], [
             'nombre' => 'Administrador',
-            'email' => 't@gmail.com',
             'password' => Hash::make('1234'),
             'estado' => true,
         ])->assignRole('admin');
 
-        Administrador::create([
-            'nombre' => 'Editor',
-            'email' => 'e@gmail.com',
-            'password' => Hash::make('1234'),
-            'estado' => true,
-        ])->assignRole('editor');
+        // Los dos meseros: cada uno entra con su usuario, abre su turno y lo cierra
+        foreach ([1, 2] as $n) {
+            Administrador::firstOrCreate(['email' => "mesero{$n}@panaderia.test"], [
+                'nombre' => "Mesero {$n}",
+                'password' => Hash::make('1234'),
+                'estado' => true,
+            ])->assignRole('mesero');
+        }
     }
 }

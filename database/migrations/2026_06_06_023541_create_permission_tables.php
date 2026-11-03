@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration
 {
     /**
-     * Run the migrations.
+     * PERMISOS DE LARAVEL SPATIE PARA CADA ROL
      */
     public function up(): void
     {

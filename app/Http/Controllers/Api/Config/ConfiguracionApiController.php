@@ -4,9 +4,13 @@ namespace App\Http\Controllers\Api\Config;
 
 use App\Http\Controllers\Controller;
 use App\Models\Categoria;
+use App\Models\AreaPreparacion;
+use App\Models\Caja;
 use App\Models\Impresora;
 use App\Models\Proveedor;
 use App\Models\UnidadesMedida;
+use App\Services\AuditoriaService;
+use App\Services\ImpresionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -17,7 +21,8 @@ class ConfiguracionApiController extends Controller
 {
 
     public function tablaCategorias(){
-        $categorias = Categoria::orderBy('id', 'ASC')->get();
+        // Con su área: el producto muestra a qué comanda va
+        $categorias = Categoria::with('area:id,nombre')->orderBy('id', 'ASC')->get();
 
         return response()->json($categorias);
     }
@@ -81,7 +86,6 @@ class ConfiguracionApiController extends Controller
             $categoria->estado = $request->estado;
             $categoria->save();
 
-            DB::commit();
 
             return response()->json([
                 'success' => 1,
@@ -89,7 +93,6 @@ class ConfiguracionApiController extends Controller
             ]);
 
         } catch (\Exception $e) {
-            DB::rollBack();
 
             Log::error('Error actualizar: ' . $e->getMessage());
 
@@ -112,17 +115,32 @@ class ConfiguracionApiController extends Controller
         return response()->json($unidadmedida);
     }
 
+    // Datos de conversión opcionales: sin ellos la unidad es de tipo "unidad" con factor 1
+    private function reglasConversionUnidad(): array
+    {
+        return [
+            'abreviatura' => 'nullable|string|max:10',
+            'tipo'        => 'nullable|in:unidad,masa,volumen',
+            'factor_base' => 'nullable|numeric|gt:0',
+        ];
+    }
+
     public function registrarUnidadMedida(Request $request)
     {
         $request->validate([
             'nombre' => 'required|string|max:100',
-        ]);
+        ] + $this->reglasConversionUnidad());
 
         try {
-            UnidadesMedida::create([
-                'nombre' => $request->nombre,
-                'estado' => true,
+            $unidad = UnidadesMedida::create([
+                'nombre'      => $request->nombre,
+                'abreviatura' => $request->abreviatura,
+                'tipo'        => $request->input('tipo', 'unidad'),
+                'factor_base' => $request->input('factor_base', 1),
+                'estado'      => true,
             ]);
+
+            AuditoriaService::registrar('catalogos', 'crear_unidad', $unidad, null, $unidad->toArray());
 
             return response()->json([
                 'success' => 1,
@@ -153,23 +171,33 @@ class ConfiguracionApiController extends Controller
         $validator = Validator::make($request->all(), [
             'nombre' => 'required|string|max:100',
             'estado' => 'required|boolean',
-        ]);
+        ] + $this->reglasConversionUnidad());
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => 0,
+                'message' => $validator->errors()->first(),
                 'errors' => $validator->errors()
             ], 422);
         }
 
         try {
+            $antes = $unidadmedida->toArray();
 
             // Datos básicos
             $unidadmedida->nombre = $request->nombre;
             $unidadmedida->estado = $request->estado;
+
+            // La conversión solo cambia si se envía (la pantalla anterior solo manda nombre y estado)
+            foreach (['abreviatura', 'tipo', 'factor_base'] as $campo) {
+                if ($request->has($campo)) {
+                    $unidadmedida->{$campo} = $request->input($campo);
+                }
+            }
             $unidadmedida->save();
 
-            DB::commit();
+            AuditoriaService::registrar('catalogos', 'actualizar_unidad', $unidadmedida, $antes, $unidadmedida->fresh()->toArray());
+
 
             return response()->json([
                 'success' => 1,
@@ -177,7 +205,6 @@ class ConfiguracionApiController extends Controller
             ]);
 
         } catch (\Exception $e) {
-            DB::rollBack();
 
             Log::error('Error actualizar: ' . $e->getMessage());
 
@@ -192,218 +219,147 @@ class ConfiguracionApiController extends Controller
 
     // ================================ IMPRESORA ==============================
 
+    private function formatoImpresora(Impresora $i): array
+    {
+        return $i->toArray() + [
+            'cajas' => Caja::where('impresora_id', $i->id)->pluck('nombre'),
+            'areas' => AreaPreparacion::where('impresora_id', $i->id)->pluck('nombre'),
+        ];
+    }
+
+    private function reglasImpresora(): array
+    {
+        return [
+            'alias'            => 'required|string|max:200',
+            'conexion'         => 'required|in:red,windows',
+            'ip_impresora'     => 'nullable|required_if:conexion,red|ip',
+            'puerto'           => 'nullable|integer|min:1|max:65535',
+            'nombre_windows'   => 'nullable|required_if:conexion,windows|string|max:200',
+            'ip_servidor'      => 'nullable|string|max:50',
+            'tipo_impresion'   => 'nullable|in:escpos,star_raster',
+            'ancho_caracteres' => 'required|in:32,42,48',
+            'uso'              => 'required|in:ticket,comanda,ambos',
+            'predeterminada'   => 'boolean',
+            'cortar_papel'     => 'boolean',
+            'cash_drawer'      => 'required|in:ninguno,pin2,pin5',
+            'activo'           => 'boolean',
+        ];
+    }
+
+    private function mensajesImpresora(): array
+    {
+        return [
+            'alias.required'             => 'Ponle un nombre a la impresora',
+            'ip_impresora.required_if'   => 'Indica la IP de la impresora de red',
+            'ip_impresora.ip'            => 'La IP no es válida (ej. 192.168.1.50)',
+            'nombre_windows.required_if' => 'Indica el nombre de la impresora tal como aparece en Windows',
+            'ancho_caracteres.in'        => 'Ancho de papel no válido',
+        ];
+    }
+
+    // Guarda los datos comunes de alta y edición
+    private function guardarImpresora(Request $request, ?Impresora $impresora = null)
+    {
+        $validator = Validator::make($request->all(), $this->reglasImpresora(), $this->mensajesImpresora());
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => 0,
+                'message' => $validator->errors()->first(),
+                'errors'  => $validator->errors(),
+            ], 422);
+        }
+
+        $datos = [
+            'tipo_impresion' => $request->input('tipo_impresion') ?: 'escpos',
+            'puerto'         => $request->input('puerto') ?: 9100,
+        ] + $validator->validated();
+
+        $antes = $impresora?->toArray();
+
+        DB::transaction(function () use (&$impresora, $datos) {
+            if ($impresora) {
+                $impresora->update($datos);
+            } else {
+                $impresora = Impresora::create($datos);
+            }
+
+            // Solo una predeterminada
+            if ($impresora->predeterminada) {
+                Impresora::whereKeyNot($impresora->id)->update(['predeterminada' => false]);
+            }
+        });
+
+        AuditoriaService::registrar('impresoras', $antes ? 'actualizar' : 'crear', $impresora, $antes, $impresora->fresh()->toArray());
+
+        return response()->json([
+            'success' => 1,
+            'message' => $antes ? 'Impresora actualizada correctamente.' : 'Impresora registrada correctamente.',
+            'data'    => $this->formatoImpresora($impresora->fresh()),
+        ], $antes ? 200 : 201);
+    }
 
     // GET /admin/impresora/index
     public function indexImpresora()
     {
-        $impresoras = Impresora::with('categorias')
-            ->orderBy('alias')
-            ->get();
+        $impresoras = Impresora::orderBy('alias')->get();
+        $cajas = Caja::whereNotNull('impresora_id')->get(['nombre', 'impresora_id'])->groupBy('impresora_id');
+        // Las comandas se reparten por área de preparación (Configuración › Mesas y cocina)
+        $areas = AreaPreparacion::whereNotNull('impresora_id')->get(['nombre', 'impresora_id'])->groupBy('impresora_id');
 
         return response()->json([
-            'data' => $impresoras,
+            'data' => $impresoras->map(fn ($i) => $i->toArray() + [
+                'cajas' => ($cajas[$i->id] ?? collect())->pluck('nombre'),
+                'areas' => ($areas[$i->id] ?? collect())->pluck('nombre'),
+            ]),
         ]);
     }
 
     // POST /admin/impresora/store
     public function nuevaImpresora(Request $request)
     {
-        $request->validate([
-            'alias'          => 'required|string|max:200',
-            'ip_impresora'   => 'required|string|max:50',
-            'ip_servidor'    => 'required|string|max:50',
-            'tipo_impresion' => 'required|in:escpos',
-            'cash_drawer'    => 'required|in:ninguno,pin2,pin5',
-            'activo'         => 'boolean',
-            'categorias'     => 'required|array|min:1',
-            'categorias.*'   => 'exists:categorias,id',
-        ]);
-
-        $impresora = Impresora::create($request->only([
-            'alias', 'ip_impresora', 'ip_servidor',
-            'tipo_impresion', 'cash_drawer', 'activo',
-        ]));
-        $impresora->categorias()->sync($request->categorias);
-
-        return response()->json([
-            'message' => 'Impresora registrada correctamente.',
-            'data'    => $impresora->load('categorias'),
-        ], 201);
+        return $this->guardarImpresora($request);
     }
 
     // GET /admin/impresora/{impresora}
     public function showImpresora(Impresora $impresora)
     {
         return response()->json([
-            'data' => $impresora->load('categorias'),
+            'data' => $this->formatoImpresora($impresora),
         ]);
     }
 
     // POST /admin/impresora/{impresora}/update
     public function updateImpresora(Request $request, Impresora $impresora)
     {
-        $request->validate([
-            'alias'          => 'required|string|max:200',
-            'ip_impresora'   => 'required|string|max:50',
-            'ip_servidor'    => 'required|string|max:50',
-            'tipo_impresion' => 'required|in:escpos',
-            'cash_drawer'    => 'required|in:ninguno,pin2,pin5',
-            'activo'         => 'boolean',
-            'categorias'     => 'required|array|min:1',
-            'categorias.*'   => 'exists:categorias,id',
-        ]);
-
-        $impresora->update($request->only([
-            'alias', 'ip_impresora', 'ip_servidor',
-            'tipo_impresion', 'cash_drawer', 'activo',
-        ]));
-        $impresora->categorias()->sync($request->categorias);
-
-        return response()->json([
-            'message' => 'Impresora actualizada correctamente.',
-            'data'    => $impresora->load('categorias'),
-        ]);
+        return $this->guardarImpresora($request, $impresora);
     }
 
     // DELETE /admin/impresora/{impresora}/destroy
     public function borrarImpresora(Impresora $impresora)
     {
+        // Las cajas que la usaban pasan a la predeterminada
+        Caja::where('impresora_id', $impresora->id)->update(['impresora_id' => null]);
         $impresora->delete();
 
+        AuditoriaService::registrar('impresoras', 'eliminar', $impresora, $impresora->toArray(), null);
+
         return response()->json([
+            'success' => 1,
             'message' => 'Impresora eliminada correctamente.',
         ]);
     }
 
-
-    public function testPrintImpresoraReal(Impresora $impresora)
+    // POST /admin/impresora/{impresora}/test
+    public function testPrintImpresoraReal(Request $request, Impresora $impresora)
     {
-        $printerName = 'STAR1';  // Nombre del driver en el spooler de Windows
-        $fontName    = 'Consolas';
-        $fontSize    = 11;
-        $width       = 32;
-
-        $centrar = function (string $texto) use ($width): string {
-            $espacios = max(0, intval(($width - mb_strlen($texto)) / 2));
-            return str_repeat(' ', $espacios) . $texto . "\r\n";
-        };
-
-        $separador = str_repeat('-', $width) . "\r\n";
-
-        $contenido  = $separador;
-        $contenido .= $centrar('CAFETERIA EDUARDO');
-        $contenido .= $centrar('Tel: 0000-0000');
-        $contenido .= $separador;
-        $contenido .= $centrar('PRUEBA DE IMPRESION');
-        $contenido .= $separador;
-        $contenido .= "Fecha    : " . now()->format('d/m/Y') . "\r\n";
-        $contenido .= "Hora     : " . now()->format('H:i:s') . "\r\n";
-        $contenido .= "Impresora: " . $impresora->alias . "\r\n";
-        $contenido .= "IP       : " . $impresora->ip_impresora . "\r\n";
-        $contenido .= $separador;
-        $contenido .= $centrar('Impresion correcta!');
-        $contenido .= $separador;
-
-        // Comando ESC/POS para abrir cajón (se agrega antes de los saltos finales)
-        $cajon = match ($impresora->cash_drawer) {
-            'pin2' => "\x1B\x70\x00\x19\xFA",
-            'pin5' => "\x1B\x70\x01\x19\xFA",
-            default => '',
-        };
-        $contenido .= $cajon;
-        $contenido .= "\r\n\r\n\r\n";
-
-        // Guardar ticket en archivo temporal
-        $tmpTxt = 'C:\\Windows\\Temp\\ticket_' . time() . '.txt';
-        file_put_contents($tmpTxt, "\xEF\xBB\xBF" . $contenido);
-
-        // Script PowerShell
-        $ps1 = 'C:\\Windows\\Temp\\print_' . time() . '.ps1';
-        $script = <<<PS
-        Add-Type -AssemblyName System.Drawing
-        \$texto  = Get-Content -LiteralPath '$tmpTxt' -Raw -Encoding UTF8
-        \$lineas = \$texto -split "`r`n"
-        \$pd = New-Object System.Drawing.Printing.PrintDocument
-        \$pd.PrinterSettings.PrinterName = '$printerName'
-        \$pd.DocumentName = 'Ticket'
-        \$pd.DefaultPageSettings.Margins = New-Object System.Drawing.Printing.Margins(0,0,0,0)
-        \$fuente = New-Object System.Drawing.Font('$fontName', $fontSize, [System.Drawing.FontStyle]::Bold)
-        \$global:idx = 0
-        \$pd.add_PrintPage({
-            param(\$sender, \$e)
-            \$y  = 0
-            \$lh = \$fuente.GetHeight(\$e.Graphics)
-            while (\$global:idx -lt \$lineas.Length) {
-                \$e.Graphics.DrawString(\$lineas[\$global:idx], \$fuente, [System.Drawing.Brushes]::Black, 0, \$y)
-                \$y += \$lh
-                \$global:idx++
-            }
-            \$e.HasMorePages = \$false
-        })
-        try {
-            \$pd.Print()
-            Write-Output 'OK'
-        } catch {
-            Write-Output ("ERROR: " + \$_.Exception.Message)
-        }
-        PS;
-
-        file_put_contents($ps1, $script);
-
-        $cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' . $ps1 . '"';
-        exec($cmd, $output, $code);
-
-        @unlink($tmpTxt);
-        @unlink($ps1);
-
-        $ok = $code === 0 && in_array('OK', $output, true);
+        $trabajo = ImpresionService::prueba($impresora, $request->user()?->id);
+        $ok = $trabajo->estado === 'impreso';
 
         return response()->json([
             'success' => $ok,
-            'message' => $ok ? 'Impreso correctamente' : 'Error al imprimir',
-            'output'  => $output,
-        ]);
+            'message' => $ok ? 'Impreso correctamente' : $trabajo->error,
+            'trabajo' => $trabajo->only(['id', 'estado', 'error']),
+        ], $ok ? 200 : 422);
     }
-
-
-
-    public function indexProveedores(Request $request)
-    {
-        $proveedores = Proveedor::when($request->search, fn($q, $s) =>
-        $q->where('nombre', 'like', "%$s%")
-        )
-            ->orderBy('nombre')
-            ->get();
-
-        return response()->json($proveedores);
-    }
-
-    public function storeProveedores(Request $request)
-    {
-        $data = $request->validate([
-            'nombre' => 'required|string|max:200',
-            'notas'  => 'nullable|string',
-            'activo' => 'boolean',
-        ]);
-
-        $proveedor = Proveedor::create($data);
-
-        return response()->json($proveedor, 201);
-    }
-
-    public function updateProveedores(Request $request, Proveedor $proveedor)
-    {
-        $data = $request->validate([
-            'nombre' => 'required|string|max:200',
-            'notas'  => 'nullable|string',
-            'activo' => 'boolean',
-        ]);
-
-        $proveedor->update($data);
-
-        return response()->json($proveedor);
-    }
-
-
-
 }

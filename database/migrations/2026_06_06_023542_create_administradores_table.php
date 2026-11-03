@@ -9,7 +9,7 @@ return new class extends Migration
     /**
      * TABLA ADMINISTRADOR
      * 1- ADMIN TOTAL
-     * 2- USUARIO CON X PERMISOS
+     * 2- MESERO
      */
     public function up(): void
     {
@@ -19,6 +19,7 @@ return new class extends Migration
             $table->string('email', 100)->unique();
             $table->string('password');
             $table->boolean('estado')->default(true);
+            $table->timestamp('ultimo_acceso')->nullable(); // se actualiza en cada login
             $table->rememberToken();
 
             $table->timestamps();

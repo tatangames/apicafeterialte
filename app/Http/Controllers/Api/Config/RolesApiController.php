@@ -13,6 +13,7 @@ use Spatie\Permission\Exceptions\RoleDoesNotExist;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
 use Illuminate\Support\Facades\Validator;
+use App\Services\AuditoriaService;
 
 class RolesApiController extends Controller
 {
@@ -42,9 +43,12 @@ class RolesApiController extends Controller
             $role->syncPermissions([]);
 
             // Eliminar rol
+            $antes = ['nombre' => $role->name, 'permisos' => $role->permissions()->pluck('name')->toArray()];
             $role->delete();
 
             DB::commit();
+
+            AuditoriaService::registrar('roles', 'eliminar', null, $antes, null, "Rol eliminado: {$antes['nombre']}");
 
             return [
                 'success' => true,
@@ -113,6 +117,8 @@ class RolesApiController extends Controller
             $role->revokePermissionTo($permission);
 
             DB::commit();
+
+            AuditoriaService::registrar('roles', 'quitar_permiso', $role, ['permiso' => $permission->name], null);
 
             return ['success' => true];
         } catch (\Throwable $e) {
@@ -194,6 +200,8 @@ class RolesApiController extends Controller
 
             // ✅ Asignar permiso
             $role->givePermissionTo($permission);
+
+            AuditoriaService::registrar('roles', 'asignar_permiso', $role, null, ['permiso' => $permission->name]);
 
             return response()->json([
                 'success' => 1,
@@ -305,6 +313,74 @@ class RolesApiController extends Controller
 
 
 
+    /**
+     * Matriz de permisos del rol, agrupada por módulo. Incluye los permisos
+     * extra creados a mano (fuera del catálogo) en «Otros».
+     */
+    public function matrizPermisos($id)
+    {
+        $rol = Role::findOrFail($id);
+        $catalogo = config('permisos.permisos');
+        $modulos = config('permisos.modulos');
+        $asignados = $rol->permissions->pluck('name')->flip();
+
+        $grupos = [];
+        foreach (Permission::where('guard_name', 'api')->orderBy('name')->get() as $permiso) {
+            $prefijo = explode('.', $permiso->name)[0];
+            $modulo = isset($catalogo[$permiso->name]) ? ($modulos[$prefijo] ?? ucfirst($prefijo)) : 'Otros';
+            $grupos[$modulo][] = [
+                'nombre'      => $permiso->name,
+                'descripcion' => $catalogo[$permiso->name] ?? $permiso->description ?? $permiso->name,
+                'asignado'    => $rol->name === 'admin' || $asignados->has($permiso->name),
+            ];
+        }
+
+        // Mismo orden que el menú (el del catálogo de módulos); «Otros» al final
+        $orden = array_flip(array_values($modulos));
+        uksort($grupos, fn ($a, $b) => ($orden[$a] ?? 999) <=> ($orden[$b] ?? 999));
+
+        return response()->json([
+            'success'  => 1,
+            'rol'      => ['id' => $rol->id, 'nombre' => $rol->name, 'es_admin' => $rol->name === 'admin', 'usuarios' => $rol->users()->count()],
+            'modulos'  => collect($grupos)->map(fn ($permisos, $modulo) => ['modulo' => $modulo, 'permisos' => $permisos])->values(),
+        ]);
+    }
+
+    // PUT /admin/roles/{id}/permisos {permisos: [...]}: reemplaza los permisos del rol
+    public function guardarMatriz(Request $request, $id)
+    {
+        $rol = Role::findOrFail($id);
+
+        if ($rol->name === 'admin') {
+            return response()->json(['success' => 0, 'message' => 'El rol admin tiene acceso total: sus permisos no se editan'], 422);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'permisos'   => 'present|array',
+            'permisos.*' => 'string|exists:permissions,name',
+        ], [
+            'permisos.*.exists' => 'Uno de los permisos no existe',
+        ]);
+        if ($validator->fails()) {
+            return response()->json(['success' => 0, 'message' => $validator->errors()->first(), 'errors' => $validator->errors()], 422);
+        }
+
+        $antes = $rol->permissions->pluck('name')->sort()->values()->all();
+        $rol->syncPermissions($request->permisos);
+        app()[\Spatie\Permission\PermissionRegistrar::class]->forgetCachedPermissions();
+        $despues = collect($request->permisos)->sort()->values()->all();
+
+        AuditoriaService::registrar('roles', 'permisos', $rol,
+            ['quitados' => array_values(array_diff($antes, $despues))],
+            ['agregados' => array_values(array_diff($despues, $antes))],
+            "Permisos del rol {$rol->name}");
+
+        return response()->json([
+            'success' => 1,
+            'message' => 'Permisos del rol actualizados (' . count($despues) . ' en total)',
+        ]);
+    }
+
     public function tablaUsuarios(){
         $usuarios = Administrador::orderBy('id', 'ASC')
             ->get()
@@ -315,6 +391,7 @@ class RolesApiController extends Controller
                     'correo' => $u->email,
                     'estado' => $u->estado,
                     'rol' => $u->getRoleNames()->first() ?? 'Sin rol',
+                    'ultimo_acceso' => $u->ultimo_acceso?->format('Y-m-d H:i'),
                 ];
             });
 
@@ -343,11 +420,12 @@ class RolesApiController extends Controller
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Error de validación',
+                'message' => $validator->errors()->first(),
                 'errors' => $validator->errors(),
             ], 422);
         }
 
+        DB::beginTransaction();
         try {
             $usuario = Administrador::create([
                 'nombre' => $request->nombre,
@@ -359,6 +437,14 @@ class RolesApiController extends Controller
             // Spatie
             $usuario->assignRole($request->rol);
 
+            DB::commit();
+
+            AuditoriaService::registrar('usuarios', 'crear', $usuario, null, [
+                'nombre' => $usuario->nombre,
+                'email'  => $usuario->email,
+                'rol'    => $request->rol,
+            ]);
+
             return response()->json([
                 'success' => true,
                 'message' => 'Usuario creado correctamente',
@@ -366,13 +452,13 @@ class RolesApiController extends Controller
             ], 201);
 
         } catch (\Exception $e) {
+            DB::rollBack();
 
-            Log::info('Error al crear usuario: ' . $e->getMessage());
+            Log::error('Error al crear usuario: ' . $e->getMessage());
 
             return response()->json([
                 'success' => false,
                 'message' => 'Error al crear el usuario',
-                'error' => $e->getMessage(),
             ], 500);
         }
     }
@@ -426,11 +512,13 @@ class RolesApiController extends Controller
             'password' => 'nullable|string|min:8',
             'rol' => 'required|integer|exists:roles,id',
             'estado' => 'required|boolean',
+        ], [
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => 0,
+                'message' => $validator->errors()->first(),
                 'errors' => $validator->errors()
             ], 422);
         }
@@ -445,18 +533,31 @@ class RolesApiController extends Controller
             ], 422);
         }
 
+        $antes = [
+            'nombre' => $usuario->nombre,
+            'email'  => $usuario->email,
+            'estado' => $usuario->estado,
+            'rol'    => $usuario->getRoleNames()->first(),
+        ];
+
+        DB::beginTransaction();
         try {
 
             // Datos básicos
             $usuario->nombre = $request->nombre;
             $usuario->email = $request->email;
-            $usuario->estado = $request->estado;
+            $usuario->estado = filter_var($request->estado, FILTER_VALIDATE_BOOLEAN);
 
             if ($request->filled('password')) {
                 $usuario->password = bcrypt($request->password);
             }
 
             $usuario->save();
+
+            // Un usuario desactivado pierde sus sesiones abiertas
+            if (!$usuario->estado) {
+                $usuario->tokens()->delete();
+            }
 
             // Rol
             $role = Role::find($request->rol);
@@ -472,6 +573,14 @@ class RolesApiController extends Controller
             $usuario->syncRoles([$role->name]);
 
             DB::commit();
+
+            AuditoriaService::registrar('usuarios', 'actualizar', $usuario, $antes, [
+                'nombre'          => $usuario->nombre,
+                'email'           => $usuario->email,
+                'estado'          => $usuario->estado,
+                'rol'             => $role->name,
+                'cambio_password' => $request->filled('password'),
+            ]);
 
             return response()->json([
                 'success' => 1,

@@ -11,6 +11,10 @@ use Illuminate\Http\Request;
 use Symfony\Component\HttpKernel\Exception\MethodNotAllowedHttpException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
+use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
+use Spatie\Permission\Exceptions\UnauthorizedException;
+use App\Exceptions\NegocioException;
+use App\Exceptions\AutorizacionRequeridaException;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -22,6 +26,13 @@ return Application::configure(basePath: dirname(__DIR__))
         //$middleware->redirectGuestsTo(fn () => abort(401, 'Usuario no autenticado'));
         // NO EXISTE VISTA PARA REDIRECCIONAR POR SER API
         $middleware->redirectGuestsTo(fn (Request $request) => null);
+
+        $middleware->alias([
+            'role'               => \Spatie\Permission\Middleware\RoleMiddleware::class,
+            'permission'         => \Spatie\Permission\Middleware\PermissionMiddleware::class,
+            'role_or_permission' => \Spatie\Permission\Middleware\RoleOrPermissionMiddleware::class,
+            'usuario.activo'     => \App\Http\Middleware\UsuarioActivo::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
 
@@ -41,6 +52,34 @@ return Application::configure(basePath: dirname(__DIR__))
                 'status'  => 'FORBIDDEN',
                 'message' => 'No tienes permisos para realizar esta acción.',
             ], 403);
+        });
+
+        // 403 - Sin permiso (middleware de Spatie)
+        $exceptions->render(function (UnauthorizedException $e, Request $request) {
+            return response()->json([
+                'success' => false,
+                'status'  => 'FORBIDDEN',
+                'message' => 'No tienes permisos para realizar esta acción.',
+            ], 403);
+        });
+
+        // 403 - La operación pide un permiso que el usuario no tiene (la hace el administrador)
+        $exceptions->render(function (AutorizacionRequeridaException $e, Request $request) {
+            return response()->json([
+                'success' => false,
+                'status'  => 'SIN_PERMISO',
+                'permiso' => $e->permiso,
+                'message' => $e->getMessage(),
+            ], 403);
+        });
+
+        // 422 - Regla de negocio no cumplida (mensaje pensado para el usuario)
+        $exceptions->render(function (NegocioException $e, Request $request) {
+            return response()->json([
+                'success' => false,
+                'status'  => 'BUSINESS_RULE',
+                'message' => $e->getMessage(),
+            ], 422);
         });
 
         // 422 - Validación
@@ -88,6 +127,15 @@ return Application::configure(basePath: dirname(__DIR__))
                 'status'  => 'TOO_MANY_REQUESTS',
                 'message' => 'Demasiadas peticiones. Intenta de nuevo más tarde.',
             ], 429);
+        });
+
+        // Otros errores HTTP: conservar su código
+        $exceptions->render(function (HttpExceptionInterface $e, Request $request) {
+            return response()->json([
+                'success' => false,
+                'status'  => 'HTTP_ERROR',
+                'message' => $e->getMessage() ?: 'Error en la petición.',
+            ], $e->getStatusCode());
         });
 
         // 500 - Error interno (catch-all)

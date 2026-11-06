@@ -21,6 +21,8 @@ use Tests\TestCase;
 
 class ComprasTest extends TestCase
 {
+    protected bool $turnoSigueAlUsuario = true;
+
     private Caja $caja;
     private TurnoCaja $turno;
     private Proveedor $proveedor;
@@ -312,6 +314,40 @@ class ComprasTest extends TestCase
         $this->postJson("/api/cuentas-pagar/proveedores/{$this->proveedor->id}/pagos", [
             'uuid' => (string) Str::uuid(), 'monto' => 150, 'origen' => 'externo',
         ])->assertStatus(422)->assertJsonPath('message', 'A Molinos S.A. se le deben $100.00: el pago no puede ser mayor');
+    }
+
+    public function test_nota_de_credito_rebaja_la_deuda_y_se_puede_anular(): void
+    {
+        $this->actuarComo('admin');
+        $this->comprar(['numero_documento' => 'F-9']); // $50 al crédito
+        $cuenta = CuentaPagar::first();
+
+        $this->postJson("/api/cuentas-pagar/{$cuenta->id}/notas-credito", ['monto' => 60, 'motivo' => 'Digitado de más'])
+            ->assertStatus(422)->assertJsonPath('message', 'La nota no puede ser mayor a lo que se debe de esta compra ($50.00)');
+        $this->postJson("/api/cuentas-pagar/{$cuenta->id}/notas-credito", ['monto' => 12.5])->assertStatus(422);
+
+        $nota = $this->postJson("/api/cuentas-pagar/{$cuenta->id}/notas-credito", ['monto' => 12.5, 'motivo' => 'Se digitaron 5 lb de más', 'documento' => 'NC-77'])
+            ->assertOk()->assertJsonPath('cuenta.saldo', 37.5)->assertJsonPath('cuenta.notas_credito.0.numero', 'NC-000001')
+            ->json('cuenta.notas_credito.0');
+        $this->assertEquals(37.5, $this->saldoProveedor());
+        $this->assertDatabaseHas('auditorias', ['accion' => 'nota_credito_proveedor']);
+
+        // Rebajar todo deja la cuenta pagada
+        $this->postJson("/api/cuentas-pagar/{$cuenta->id}/notas-credito", ['monto' => 37.5, 'motivo' => 'Devolución completa'])->assertOk()
+            ->assertJsonPath('cuenta.estado', 'pagada');
+        $this->assertEquals(0, $this->saldoProveedor());
+        $this->postJson("/api/cuentas-pagar/{$cuenta->id}/notas-credito", ['monto' => 1, 'motivo' => 'x'])
+            ->assertStatus(422)->assertJsonPath('message', 'Esta cuenta ya está pagada: no hay saldo que rebajar');
+
+        // Anular la primera: esos $12.50 vuelven a deberse
+        $this->postJson("/api/cuentas-pagar/notas-credito/{$nota['id']}/anular", ['motivo' => 'Era correcto'])->assertOk()
+            ->assertJsonPath('cuenta.saldo', 12.5)->assertJsonPath('cuenta.estado', 'pendiente');
+        $this->assertEquals(12.5, $this->saldoProveedor());
+        $this->postJson("/api/cuentas-pagar/notas-credito/{$nota['id']}/anular", ['motivo' => 'otra vez'])->assertStatus(422);
+
+        // Sin el permiso de cuentas por pagar no se puede
+        $this->actuarComo('encargado_inventario');
+        $this->postJson("/api/cuentas-pagar/{$cuenta->id}/notas-credito", ['monto' => 1, 'motivo' => 'x'])->assertStatus(403);
     }
 
     public function test_cartera_por_pagar_e_historial_de_costos(): void

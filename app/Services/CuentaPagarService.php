@@ -6,6 +6,7 @@ use App\Exceptions\NegocioException;
 use App\Models\Administrador;
 use App\Models\CuentaPagar;
 use App\Models\MetodoPago;
+use App\Models\NotaCreditoProveedor;
 use App\Models\PagoProveedor;
 use App\Models\PagoProveedorDetalle;
 use App\Models\Proveedor;
@@ -59,6 +60,7 @@ class CuentaPagarService
                     if (!$turno) {
                         throw new NegocioException('Abre el turno de caja para pagar desde la caja');
                     }
+                    CajaService::exigirTurnoPropio($turno);
                 }
 
                 $pago = PagoProveedor::create([
@@ -191,9 +193,85 @@ class CuentaPagarService
         });
     }
 
+    /**
+     * Nota de crédito: rebaja el saldo de una cuenta sin mover caja (se digitó de más,
+     * devolución al proveedor, descuento acordado). Queda en auditoría y se puede anular.
+     */
+    public static function registrarNotaCredito(CuentaPagar $cuenta, float $monto, string $motivo, ?string $documento, Administrador $usuario): NotaCreditoProveedor
+    {
+        return DB::transaction(function () use ($cuenta, $monto, $motivo, $documento, $usuario) {
+            $monto = round($monto, 2);
+            $cuenta = CuentaPagar::whereKey($cuenta->id)->lockForUpdate()->first();
+
+            if ($cuenta->estado === 'anulada') {
+                throw new NegocioException('La compra de esta cuenta está anulada');
+            }
+            if ($monto <= 0) {
+                throw new NegocioException('El monto debe ser mayor a 0');
+            }
+            if ((float) $cuenta->saldo <= 0) {
+                throw new NegocioException('Esta cuenta ya está pagada: no hay saldo que rebajar');
+            }
+            if ($monto > (float) $cuenta->saldo + 0.001) {
+                throw new NegocioException('La nota no puede ser mayor a lo que se debe de esta compra ($'
+                    . number_format((float) $cuenta->saldo, 2) . ')');
+            }
+
+            $nota = NotaCreditoProveedor::create([
+                'numero'          => CorrelativoService::siguiente('nota_credito_proveedor', 'NC'),
+                'proveedor_id'    => $cuenta->proveedor_id,
+                'cuenta_pagar_id' => $cuenta->id,
+                'fecha'           => today(),
+                'monto'           => $monto,
+                'motivo'          => $motivo,
+                'documento'       => $documento ?: null,
+                'usuario_id'      => $usuario->id,
+            ]);
+
+            $antes = (float) $cuenta->saldo;
+            $saldo = round($antes - $monto, 2);
+            $cuenta->update(['saldo' => $saldo, 'estado' => $saldo <= 0 ? 'pagada' : 'pendiente']);
+
+            $proveedor = Proveedor::whereKey($cuenta->proveedor_id)->lockForUpdate()->first();
+            $proveedor->update(['saldo' => round(max(0, (float) $proveedor->saldo - $monto), 2)]);
+
+            AuditoriaService::registrar('compras', 'nota_credito_proveedor', $nota,
+                ['saldo_cuenta' => $antes], ['saldo_cuenta' => $saldo, 'monto' => $monto], $motivo);
+
+            return $nota;
+        });
+    }
+
+    public static function anularNotaCredito(NotaCreditoProveedor $nota, string $motivo, Administrador $usuario): NotaCreditoProveedor
+    {
+        return DB::transaction(function () use ($nota, $motivo, $usuario) {
+            $nota = NotaCreditoProveedor::whereKey($nota->id)->lockForUpdate()->first();
+            if ($nota->anulada) {
+                throw new NegocioException('La nota ya está anulada');
+            }
+
+            $cuenta = CuentaPagar::whereKey($nota->cuenta_pagar_id)->lockForUpdate()->first();
+            if ($cuenta->estado === 'anulada') {
+                throw new NegocioException('La compra de esta cuenta está anulada: la nota ya no aplica');
+            }
+
+            // Lo rebajado vuelve a deberse
+            $cuenta->update(['saldo' => round((float) $cuenta->saldo + (float) $nota->monto, 2), 'estado' => 'pendiente']);
+            $proveedor = Proveedor::whereKey($nota->proveedor_id)->lockForUpdate()->first();
+            $proveedor->update(['saldo' => round((float) $proveedor->saldo + (float) $nota->monto, 2)]);
+
+            $nota->update(['anulada' => true, 'anulada_por' => $usuario->id, 'anulada_at' => now(), 'motivo_anulacion' => $motivo]);
+
+            AuditoriaService::registrar('compras', 'anular_nota_credito_proveedor', $nota,
+                ['anulada' => false], ['anulada' => true], $motivo);
+
+            return $nota;
+        });
+    }
+
     public static function formatoCuenta(CuentaPagar $c): array
     {
-        $c->loadMissing('compra:id,numero,fecha,tipo_documento,numero_documento');
+        $c->loadMissing('compra:id,numero,fecha,tipo_documento,numero_documento', 'notasCredito.usuario:id,nombre');
 
         return [
             'id'                => $c->id,
@@ -207,6 +285,16 @@ class CuentaPagarService
             'estado'            => $c->estado,
             'vencida'           => $c->estaVencida(),
             'dias_vencida'      => $c->estaVencida() ? (int) $c->fecha_vencimiento->diffInDays(today()) : 0,
+            'notas_credito'     => $c->notasCredito->sortByDesc('id')->values()->map(fn ($n) => [
+                'id'        => $n->id,
+                'numero'    => $n->numero,
+                'fecha'     => $n->fecha->toDateString(),
+                'monto'     => (float) $n->monto,
+                'motivo'    => $n->motivo,
+                'documento' => $n->documento,
+                'usuario'   => $n->usuario?->nombre,
+                'anulada'   => $n->anulada,
+            ]),
         ];
     }
 }

@@ -24,11 +24,14 @@ class Administrador extends Authenticatable
         'password',
         'estado',
         'ultimo_acceso',
+        'pin',
+        'pin_actualizado_at',
     ];
 
     protected $hidden = [
         'password',
         'remember_token',
+        'pin',
     ];
 
     protected $casts = [
@@ -36,6 +39,8 @@ class Administrador extends Authenticatable
         'password' => 'hashed',
         'estado' => 'boolean',
         'ultimo_acceso' => 'datetime',
+        'pin' => 'hashed',
+        'pin_actualizado_at' => 'datetime',
     ];
 
     public function sendPasswordResetNotification($token)

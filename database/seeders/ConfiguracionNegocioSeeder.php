@@ -25,7 +25,7 @@ class ConfiguracionNegocioSeeder extends Seeder
         }
 
         $correlativos = [
-            ['tipo' => 'venta',        'prefijo' => 'T'],
+            ['tipo' => 'venta',        'prefijo' => ''],  // el ticket es solo número: 000123
             ['tipo' => 'devolucion',   'prefijo' => 'DEV'],
             ['tipo' => 'orden_compra', 'prefijo' => 'OC'],
             ['tipo' => 'compra',       'prefijo' => 'C'],

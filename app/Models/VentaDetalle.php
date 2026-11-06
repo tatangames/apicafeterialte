@@ -12,6 +12,7 @@ class VentaDetalle extends Model
         'venta_id',
         'producto_id',
         'nombre_producto',
+        'extras',
         'unidad',
         'cantidad',
         'precio_unitario',
@@ -25,6 +26,7 @@ class VentaDetalle extends Model
     ];
 
     protected $casts = [
+        'extras'            => 'array',
         'cantidad'          => 'decimal:4',
         'precio_unitario'   => 'decimal:2',
         'descuento_valor'   => 'decimal:2',

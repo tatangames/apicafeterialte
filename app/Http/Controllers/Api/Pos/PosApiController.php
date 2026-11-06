@@ -4,21 +4,34 @@ namespace App\Http\Controllers\Api\Pos;
 
 use App\Http\Controllers\Controller;
 use App\Models\Categoria;
+use App\Models\ConfiguracionNegocio;
+use App\Models\GrupoModificador;
 use App\Models\Producto;
+use App\Models\Receta;
 use App\Services\InventarioService;
+use App\Services\ProduccionService;
 
 class PosApiController extends Controller
 {
     // GET /pos/catalogo — todo lo que el POS necesita para vender (se guarda en el dispositivo)
     public function catalogo()
     {
-        $productos = Producto::with(['categorias:id,area_preparacion_id', 'categorias.area:id,nombre,activo', 'inventario', 'unidadMedida'])
+        $lista = Producto::with(['categorias:id,area_preparacion_id', 'categorias.area:id,nombre,activo', 'inventario', 'unidadMedida', 'gruposModificadores:id'])
             ->where('activo', true)
             ->where('se_vende', true)
             ->orderBy('orden_pos')
             ->orderBy('nombre')
-            ->get()
-            ->map(fn (Producto $p) => [
+            ->get();
+
+        // Lo que lleva cada plato con receta de venta: se puede quitar o aumentar sin cambiar el precio
+        $recetas = Receta::with(['ingredientes.producto.unidadMedida', 'ingredientes.unidad'])
+            ->whereIn('producto_id', $lista->where('controla_stock', false)->pluck('id'))
+            ->where('activa', true)->where('uso', 'venta')->get()->keyBy('producto_id');
+
+        $grupos = GrupoModificador::with(['opciones' => fn ($q) => $q->where('activo', true)])->where('activo', true)->get();
+        $agotadas = \App\Http\Controllers\Api\Mesas\MesaApiController::opcionesAgotadas($grupos);
+
+        $productos = $lista->map(fn (Producto $p) => [
                 'id'               => $p->id,
                 'nombre'           => $p->nombre,
                 'sku'              => $p->sku,
@@ -38,6 +51,9 @@ class PosApiController extends Controller
                     (float) ($p->inventario->stock_actual ?? 0),
                     (float) ($p->inventario->stock_minimo ?? 0)
                 ),
+                // Extras (leche, endulzante) y receta ajustable ("sin huevo")
+                'grupos'           => $p->gruposModificadores->pluck('id'),
+                'receta'           => $recetas->has($p->id) ? ProduccionService::ingredientesPorUnidad($recetas->get($p->id)) : [],
             ]);
 
         // Solo categorías que tienen productos a la venta
@@ -48,6 +64,16 @@ class PosApiController extends Controller
             'success'      => 1,
             'productos'    => $productos,
             'categorias'   => $categorias,
+            'grupos'       => $grupos->map(fn (GrupoModificador $g) => [
+                'id'          => $g->id,
+                'nombre'      => $g->nombre,
+                'obligatorio' => $g->obligatorio,
+                'multiple'    => $g->multiple,
+                'opciones'    => $g->opciones->map(fn ($o) => ['id' => $o->id, 'nombre' => $o->nombre, 'precio' => (float) $o->precio,
+                    'agotado' => $agotadas->contains($o->id)]),
+            ]),
+            // false: no se agrega a la venta más de lo que hay en existencia
+            'permitir_stock_negativo' => (bool) ConfiguracionNegocio::actual()->permitir_stock_negativo,
             'generado_at'  => now()->toIso8601String(),
         ]);
     }

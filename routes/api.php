@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\Manuales\ManualApiController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\Login\LoginApiController;
@@ -19,6 +20,7 @@ use App\Http\Controllers\Api\Pos\VentaApiController;
 use App\Http\Controllers\Api\Pos\PedidoApiController;
 use App\Http\Controllers\Api\Pos\ImpresionApiController;
 use App\Http\Controllers\Api\Pos\SyncApiController;
+use App\Http\Controllers\Api\Pos\MostradorApiController;
 use App\Http\Controllers\Api\Clientes\ClienteApiController;
 use App\Http\Controllers\Api\Clientes\PedidoEspecialApiController;
 use App\Http\Controllers\Api\Compras\CompraApiController;
@@ -29,6 +31,7 @@ use App\Http\Controllers\Api\Gastos\GastoApiController;
 use App\Http\Controllers\Api\Reportes\ReporteApiController;
 use App\Http\Controllers\Api\Mesas\MesaApiController;
 use App\Http\Controllers\Api\Mesas\ConfigMesasApiController;
+use App\Http\Controllers\Api\Notificaciones\NotificacionApiController;
 
 
 
@@ -45,9 +48,26 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
     Route::post('/logout', [LoginApiController::class, 'logout']);
 
     Route::get('/me', [AuthApiController::class, 'me']);
+    Route::put('/me/pin', [AuthApiController::class, 'cambiarPin'])->middleware('throttle:10,1');
+    Route::post('/me/desbloquear', [AuthApiController::class, 'desbloquear'])->middleware('throttle:20,1');
 
     Route::get('/datos', [DashboardApiController::class, 'datos']);
 
+    // ── NOTIFICACIONES (cada usuario las suyas) ───────────────
+    Route::get('/notificaciones/resumen', [NotificacionApiController::class, 'resumen']);
+    Route::get('/notificaciones', [NotificacionApiController::class, 'index']);
+    Route::post('/notificaciones/leer-todas', [NotificacionApiController::class, 'leerTodas']);
+    Route::patch('/notificaciones/{id}/leer', [NotificacionApiController::class, 'leer'])->whereNumber('id');
+    Route::delete('/notificaciones/{id}', [NotificacionApiController::class, 'destroy'])->whereNumber('id');
+    Route::delete('/notificaciones', [NotificacionApiController::class, 'vaciar']);
+
+
+    // ── MANUALES DE USO ───────────────────────────────────────
+    Route::get('/manuales', [ManualApiController::class, 'index'])->middleware('permission:manuales.ver');
+    Route::middleware('permission:roles.gestionar')->group(function () {
+        Route::get('/manuales/permisos', [ManualApiController::class, 'permisos']);
+        Route::put('/manuales/permisos/{rol}', [ManualApiController::class, 'guardarPermisos'])->whereNumber('rol');
+    });
 
     // ── CONFIGURACIÓN DEL NEGOCIO ─────────────────────────────
     // Lectura para cualquier usuario autenticado (ticket, moneda, IVA)
@@ -82,6 +102,7 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
         Route::post('/admin/permisos/nuevo-usuario', [RolesApiController::class, 'nuevoUsuario']);
         Route::post('/admin/informacion/administrador', [RolesApiController::class, 'informacionAdministrador']);
         Route::put('/admin/actualizar/administrador/{id}', [RolesApiController::class, 'actualizarAdministrador']);
+        Route::delete('/admin/usuarios/{usuario}/pin', [AuthApiController::class, 'resetearPin']);
     });
 
     // ── CATEGORÍAS Y UNIDADES DE MEDIDA ───────────────────────
@@ -106,6 +127,7 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
         Route::post('/admin/impresora/{impresora}/update',      [ConfiguracionApiController::class, 'updateImpresora']);
         Route::delete('/admin/impresora/{impresora}/destroy',   [ConfiguracionApiController::class, 'borrarImpresora']);
         Route::post('/admin/impresora/{impresora}/test',        [ConfiguracionApiController::class, 'testPrintImpresoraReal']);
+        Route::post('/admin/impresora/{impresora}/test-produccion', [ConfiguracionApiController::class, 'testProduccion']);
     });
 
     // ── PROVEEDORES, COMPRAS Y CUENTAS POR PAGAR ──────────────
@@ -142,17 +164,21 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
         Route::get('/cuentas-pagar/pagos', [CompraApiController::class, 'pagos']);
         Route::post('/cuentas-pagar/proveedores/{proveedor}/pagos', [CompraApiController::class, 'registrarPago']);
         Route::post('/cuentas-pagar/pagos/{pago}/anular', [CompraApiController::class, 'anularPago']);
+        Route::post('/cuentas-pagar/{cuenta}/notas-credito', [CompraApiController::class, 'notaCredito']);
+        Route::post('/cuentas-pagar/notas-credito/{nota}/anular', [CompraApiController::class, 'anularNotaCredito']);
     });
 
     // ── PRODUCTOS ─────────────────────────────────────────────
     Route::middleware('permission:productos.ver|productos.gestionar')->group(function () {
         Route::get('/productos/tabla', [ProductosApiController::class, 'tablaProductos']);
         Route::get('/productos/editar/{id}', [ProductosApiController::class, 'mostrarProducto']);
+        Route::get('/productos/orden-pos', [ProductosApiController::class, 'ordenPos']);
     });
 
     Route::middleware('permission:productos.gestionar')->group(function () {
         Route::post('/productos/registro', [ProductosApiController::class, 'registrarProducto']);
         Route::post('/productos/actualizar/{id}', [ProductosApiController::class, 'actualizarProducto']);
+        Route::put('/productos/orden-pos', [ProductosApiController::class, 'ordenarPos']);
     });
 
     // ── INVENTARIO ────────────────────────────────────────────
@@ -210,6 +236,8 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
     Route::post('/impresion/turnos/{turno}', [ImpresionApiController::class, 'turno'])->middleware('permission:caja.cerrar|caja.historial|caja.arqueo');
     Route::post('/impresion/cajon', [ImpresionApiController::class, 'cajon'])->middleware('permission:caja.movimientos');
     Route::get('/impresion/trabajos', [ImpresionApiController::class, 'trabajos'])->middleware('permission:impresoras.gestionar');
+    Route::delete('/impresion/trabajos', [ImpresionApiController::class, 'eliminarErrores'])->middleware('permission:impresoras.gestionar');
+    Route::delete('/impresion/trabajos/{trabajo}', [ImpresionApiController::class, 'eliminar'])->middleware('permission:impresoras.gestionar');
     Route::post('/impresion/trabajos/{trabajo}/reintentar', [ImpresionApiController::class, 'reintentar'])
         ->middleware('permission:impresoras.gestionar|pos.vender');
 
@@ -279,8 +307,8 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
     });
 
     // ── GASTOS ────────────────────────────────────────────────
+    Route::get('/gastos/categorias', [GastoApiController::class, 'categorias'])->middleware('permission:gastos.ver|gastos.registrar|gastos.categorias');
     Route::middleware('permission:gastos.ver|gastos.registrar')->group(function () {
-        Route::get('/gastos/categorias', [GastoApiController::class, 'categorias']);
         Route::get('/gastos', [GastoApiController::class, 'index']);
         Route::get('/gastos/{gasto}/comprobante', [GastoApiController::class, 'comprobante']);
     });
@@ -291,6 +319,8 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
     });
     Route::middleware('permission:gastos.ver')->group(function () {
         Route::get('/gastos/resumen', [GastoApiController::class, 'resumen']);
+    });
+    Route::middleware('permission:gastos.categorias')->group(function () {
         Route::post('/gastos/categorias', [GastoApiController::class, 'guardarCategoria']);
         Route::put('/gastos/categorias/{id}', [GastoApiController::class, 'actualizarCategoria'])->whereNumber('id');
     });
@@ -298,6 +328,10 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
     // ── MESAS, CUENTAS SEPARADAS Y COMANDAS ───────────────────
     Route::middleware('permission:pos.vender')->group(function () {
         Route::get('/mesas/mapa', [MesaApiController::class, 'mapa']);
+        // Venta rápida: pedidos con la comanda enviada que se cobran después
+        Route::get('/mostrador/pedidos', [MostradorApiController::class, 'index']);
+        Route::post('/mostrador/pedidos', [MostradorApiController::class, 'store']);
+        Route::post('/mostrador/pedidos/{ticket}/items', [MostradorApiController::class, 'agregar']);
         Route::get('/mesas/catalogo', [MesaApiController::class, 'catalogo']);
         Route::get('/mesas/terminales/{terminal}', [MesaApiController::class, 'terminal']);
         Route::post('/mesas/terminales/{terminal}/abrir', [MesaApiController::class, 'abrir']);
@@ -320,11 +354,13 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
         // Cocina y barra trabajan con su ticket impreso: desde la mesa se reimprime o se marca entregada
         Route::post('/mesas/comandas/{comanda}/entregar', [MesaApiController::class, 'entregarComanda']);
         Route::post('/mesas/comandas/{comanda}/imprimir', [MesaApiController::class, 'imprimirComanda']);
+        Route::post('/mesas/comandas/{comanda}/anular', [MesaApiController::class, 'anularComanda']);
     });
 
     Route::middleware('permission:mesas.configurar')->group(function () {
         Route::get('/mesas/config/terminales', [ConfigMesasApiController::class, 'terminales']);
         Route::post('/mesas/config/terminales', [ConfigMesasApiController::class, 'guardarTerminal']);
+        Route::put('/mesas/config/terminales/orden', [ConfigMesasApiController::class, 'ordenarTerminales']);
         Route::put('/mesas/config/terminales/{id}', [ConfigMesasApiController::class, 'actualizarTerminal'])->whereNumber('id');
         Route::get('/mesas/config/areas', [ConfigMesasApiController::class, 'areas']);
         Route::post('/mesas/config/areas', [ConfigMesasApiController::class, 'guardarArea']);

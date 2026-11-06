@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Productos;
 
 use App\Http\Controllers\Controller;
+use App\Models\Categoria;
 use App\Models\Producto;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -177,6 +178,70 @@ class ProductosApiController extends Controller
         return $sku;
     }
 
+
+    // ── Orden de los botones del POS ──────────────────────────────
+
+    // Separación entre posiciones: deja espacio para meter uno en medio sin renumerar
+    private const PASO_ORDEN = 10;
+
+    /**
+     * GET /productos/orden-pos: los productos a la venta en el orden del POS,
+     * con sus categorías, para ordenarlos arrastrando y para ubicar uno nuevo.
+     */
+    public function ordenPos()
+    {
+        $productos = Producto::with('categorias:id')
+            ->where('activo', true)->where('se_vende', true)
+            ->orderBy('orden_pos')->orderBy('nombre')
+            ->get(['id', 'nombre', 'precio_venta', 'imagen', 'color_pos', 'orden_pos']);
+
+        return response()->json([
+            'success'   => 1,
+            'paso'      => self::PASO_ORDEN,
+            'categorias' => Categoria::where('estado', true)->orderBy('nombre')->get(['id', 'nombre']),
+            'productos' => $productos->map(fn (Producto $p) => [
+                'id'         => $p->id,
+                'nombre'     => $p->nombre,
+                'precio'     => (float) $p->precio_venta,
+                'imagen'     => $p->imagen,
+                'color_pos'  => $p->color_pos,
+                'orden_pos'  => (int) $p->orden_pos,
+                'categorias' => $p->categorias->pluck('id'),
+            ]),
+        ]);
+    }
+
+    /**
+     * PUT /productos/orden-pos {ids: [...]} en el orden en que deben aparecer.
+     * Reparte las posiciones que ya ocupaban esos productos (o 10, 20, 30... si
+     * estaban empatados), así reordenar una categoría no los mueve respecto de las demás.
+     */
+    public function ordenarPos(Request $request)
+    {
+        $validator = validator($request->all(), [
+            'ids'   => 'required|array|min:1|max:500',
+            'ids.*' => 'integer|distinct|exists:productos,id',
+        ], ['ids.required' => 'No hay productos para ordenar']);
+        if ($validator->fails()) {
+            return $this->errorValidacion($validator);
+        }
+        $ids = array_map('intval', $request->ids);
+
+        DB::transaction(function () use ($ids) {
+            $posiciones = Producto::whereIn('id', $ids)->pluck('orden_pos')->map(fn ($o) => (int) $o)->sort()->values();
+            // Si había empates (todos en 0), se numeran de nuevo después del mayor que ya existía
+            if ($posiciones->unique()->count() < count($ids)) {
+                $inicio = $posiciones->first() ?: 0;
+                $posiciones = collect(range(1, count($ids)))->map(fn ($n) => $inicio + $n * self::PASO_ORDEN);
+            }
+            foreach ($ids as $n => $id) {
+                Producto::whereKey($id)->update(['orden_pos' => $posiciones[$n]]);
+            }
+        });
+        AuditoriaService::registrar('productos', 'ordenar_pos', null, null, ['ids' => $ids]);
+
+        return response()->json(['success' => 1, 'message' => 'Orden del POS guardado']);
+    }
 
     public function tablaProductos()
     {

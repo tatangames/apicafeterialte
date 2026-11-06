@@ -22,6 +22,8 @@ use Tests\TestCase;
 
 class PosTest extends TestCase
 {
+    protected bool $turnoSigueAlUsuario = true;
+
     private Caja $caja;
     private TurnoCaja $turno;
     private Producto $pan;
@@ -95,7 +97,7 @@ class PosTest extends TestCase
             $this->efectivo(20)
         )->assertCreated();
 
-        $res->assertJsonPath('venta.numero', 'T-000001')
+        $res->assertJsonPath('venta.numero', '000001')
             ->assertJsonPath('venta.total', 11.5)
             ->assertJsonPath('venta.cambio', 8.5)
             ->assertJsonPath('venta.base_imponible', 11.5)    // sin IVA: lo cobrado es la venta
@@ -116,7 +118,7 @@ class PosTest extends TestCase
         $items = [['producto_id' => $this->pan->id, 'cantidad' => 2]];
 
         $this->vender($items, $this->efectivo(1), ['uuid' => $uuid])->assertCreated();
-        $this->vender($items, $this->efectivo(1), ['uuid' => $uuid])->assertOk()->assertJsonPath('venta.numero', 'T-000001');
+        $this->vender($items, $this->efectivo(1), ['uuid' => $uuid])->assertOk()->assertJsonPath('venta.numero', '000001');
 
         $this->assertSame(1, Venta::count());
         $this->assertEquals(98, $this->stock($this->pan));

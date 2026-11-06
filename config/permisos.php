@@ -70,6 +70,7 @@ return [
         // Gastos
         'gastos.ver'                => 'Ver gastos',
         'gastos.registrar'          => 'Registrar gastos',
+        'gastos.categorias'         => 'Crear y editar categorías de gasto',
 
         // Impresoras
         'impresoras.gestionar'      => 'Configurar impresoras',
@@ -83,6 +84,9 @@ return [
         'roles.gestionar'           => 'Gestionar roles y permisos',
         'auditoria.ver'             => 'Ver registro de auditoría',
         'configuracion.gestionar'   => 'Editar la configuración del negocio',
+
+        // Ayuda
+        'manuales.ver'              => 'Ver los manuales de uso del sistema',
     ],
 
     // Módulo de cada permiso (lo que va antes del punto) para la matriz de roles
@@ -110,6 +114,7 @@ return [
         'roles'          => 'Roles y permisos',
         'auditoria'      => 'Auditoría',
         'configuracion'  => 'Configuración',
+        'manuales'       => 'Manuales',
     ],
 
     // Permisos por rol base (el rol "admin" no necesita lista: tiene acceso total)
@@ -126,25 +131,7 @@ return [
             'produccion.ver', 'produccion.registrar', 'mermas.registrar',
             'clientes.ver', 'clientes.gestionar', 'cuentas_cobrar.gestionar', 'pedidos.gestionar',
             'gastos.ver', 'gastos.registrar',
-        ],
-        'cajero' => [
-            'dashboard.ver',
-            'pos.vender', 'pos.descuento', 'pos.historial', 'pos.precuentas',
-            'caja.abrir', 'caja.cerrar', 'caja.movimientos', 'caja.arqueo',
-            'productos.ver', 'inventario.ver',
-            'clientes.ver', 'clientes.gestionar', 'cuentas_cobrar.gestionar', 'pedidos.gestionar',
-            'gastos.registrar',
-        ],
-        'encargado_inventario' => [
-            'dashboard.ver',
-            'productos.ver', 'productos.gestionar', 'catalogos.gestionar',
-            'inventario.ver', 'inventario.registrar', 'inventario.ajustar', 'inventario.kardex',
-            'proveedores.gestionar', 'compras.ver', 'compras.gestionar',
-            'recetas.gestionar', 'produccion.ver', 'produccion.registrar', 'mermas.registrar',
-            'reportes.ver',
-        ],
-        'editor' => [
-            'dashboard.ver',
+            'manuales.ver',
         ],
     ],
 

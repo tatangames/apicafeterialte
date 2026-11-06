@@ -15,8 +15,13 @@ class SeguridadTest extends TestCase
     // Con sesión pero sin permiso específico, a propósito: cualquier usuario las necesita
     const SOLO_SESION = [
         'api/logout', 'api/me', 'api/datos',
+        'api/me/pin',                  // cada quien cambia su propio PIN (pide su contraseña actual)
+        'api/me/desbloquear',          // quita el bloqueo de pantalla con su propio PIN
         'api/configuracion/negocio',   // lectura: moneda y datos del ticket (el POST pide permiso)
         'api/caja/catalogos',          // cajas y formas de pago para elegir la caja del dispositivo
+        // Notificaciones propias: cada usuario solo ve, marca y borra las suyas
+        'api/notificaciones', 'api/notificaciones/resumen', 'api/notificaciones/leer-todas',
+        'api/notificaciones/{id}', 'api/notificaciones/{id}/leer',
     ];
 
     // ── Revisión de rutas ─────────────────────────────────────

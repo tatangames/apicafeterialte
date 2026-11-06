@@ -20,6 +20,9 @@ return new class extends Migration
             $table->string('password');
             $table->boolean('estado')->default(true);
             $table->timestamp('ultimo_acceso')->nullable(); // se actualiza en cada login
+            // PIN para autorizar en el POS sin dar la contraseña (guardado con hash)
+            $table->string('pin')->nullable();
+            $table->timestamp('pin_actualizado_at')->nullable();
             $table->rememberToken();
 
             $table->timestamps();

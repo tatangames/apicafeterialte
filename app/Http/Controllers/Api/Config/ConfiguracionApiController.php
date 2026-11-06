@@ -350,6 +350,19 @@ class ConfiguracionApiController extends Controller
         ]);
     }
 
+    // POST /admin/impresora/{impresora}/test-produccion: ticket de producción de ejemplo
+    public function testProduccion(Request $request, Impresora $impresora)
+    {
+        $trabajo = ImpresionService::pruebaProduccion($impresora, $request->user()?->id);
+        $ok = $trabajo->estado === 'impreso';
+
+        return response()->json([
+            'success' => $ok,
+            'message' => $ok ? 'Impreso correctamente' : $trabajo->error,
+            'trabajo' => $trabajo->only(['id', 'estado', 'error']),
+        ], $ok ? 200 : 422);
+    }
+
     // POST /admin/impresora/{impresora}/test
     public function testPrintImpresoraReal(Request $request, Impresora $impresora)
     {

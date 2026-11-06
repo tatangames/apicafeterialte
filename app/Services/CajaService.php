@@ -16,6 +16,27 @@ use Illuminate\Support\Str;
 class CajaService
 {
     /**
+     * El dinero que entra o sale de la caja va al turno de quien tiene la sesión.
+     * Si la caja tiene abierto el turno de otro (se fue sin cerrarlo), primero hay
+     * que cerrarlo: así no se mezclan ventas ni efectivo de dos personas.
+     * Cerrar y hacer arqueo sí se permite, es la forma de salir de ese estado.
+     * El admin puede operar en cualquier turno (ayuda en horas pico).
+     */
+    public static function exigirTurnoPropio(TurnoCaja $turno): void
+    {
+        $usuario = auth()->user();
+        if (!$usuario || (int) $turno->usuario_apertura_id === (int) $usuario->id) {
+            return;
+        }
+        if (method_exists($usuario, 'hasRole') && $usuario->hasRole('admin')) {
+            return;
+        }
+
+        $de = $turno->usuarioApertura?->nombre ?? 'otro usuario';
+        throw new NegocioException("La caja tiene abierto el turno de {$de}. Ciérralo y abre el tuyo para seguir.");
+    }
+
+    /**
      * Abre un turno en la caja. Bloquea la caja para que dos dispositivos no
      * abran a la vez; la base de datos además impide dos turnos abiertos por caja.
      */

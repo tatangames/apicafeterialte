@@ -71,6 +71,7 @@ class GastoService
                     if (!$turno) {
                         throw new NegocioException('Abre el turno de caja para pagar el gasto desde la caja');
                     }
+                    CajaService::exigirTurnoPropio($turno);
                 }
 
                 $gasto = Gasto::create([
@@ -130,7 +131,7 @@ class GastoService
      */
     public static function anular(Gasto $gasto, string $motivo, Administrador $usuario): Gasto
     {
-        $autorizador = AutorizacionService::autorizar($usuario, 'pos.anular', 'Anular un gasto solo lo puede hacer el administrador');
+        $autorizador = AutorizacionService::autorizar($usuario, 'pos.anular', 'Anular un gasto necesita autorización del administrador');
 
         return DB::transaction(function () use ($gasto, $motivo, $usuario, $autorizador) {
             $gasto = Gasto::whereKey($gasto->id)->lockForUpdate()->first();

@@ -7,17 +7,17 @@ Estado: terminada el 2026-11-01. Plan general: [AUDITORIA_Y_PLAN.md](../AUDITORI
 Punto de venta por terminales, al estilo de KOLO. Decisiones del dueño:
 - extras como **modificadores con precio**;
 - comandas con **pantalla de cocina y barra, además de impresión**;
-- **todo por terminales**: «CAJA 1» y «LLEVAR» son terminales del mapa, junto a las mesas.
+- **todo por terminales**: «CAJA 1» es una terminal del mapa, junto a las mesas. Lo de llevar se vende en la venta rápida (2026-11-05 se quitó el tipo «para llevar»).
 
 ## Qué cubre
 
 - **Mapa del punto de venta (`/pos`):**
   - Tarjetas: cada terminal aparece como tarjeta, en cian si está libre y en rosa si está ocupada. Las ocupadas muestran sus cuentas, la hora de ingreso, el tiempo transcurrido (corre en vivo), lo que falta cobrar, «N listos para servir» y «N por enviar».
-  - Navegación: filtro por zona (Mostrador, Salón, Terraza…), búsqueda por mesa, cuenta o mesero, y conteo de mesas ocupadas y personas.
+  - Navegación: filtro por zona (Mostrador, Salón, Terraza…), búsqueda por mesa, cuenta o mesero, y conteo de mesas ocupadas.
   - Actualización y menú: se refresca cada 15 segundos. Un botón flotante lleva a la venta rápida, la pantalla de cocina, el historial, la configuración y la caja.
   - Caja de mostrador: la terminal de tipo «caja» abre la **venta rápida** de siempre (`/pos/mostrador`), que conserva el funcionamiento sin conexión.
 - **Terminal de mesa (`/pos/terminal/{id}`):**
-  - **Abrir:** al abrir una mesa se indica cuántas personas son.
+  - **Abrir:** se toca la mesa libre y «Abrir mesa». Ya no se pregunta cuántas personas (2026-11-05); la columna `comensales` queda sin usar.
   - **Productos:** búsqueda, categorías y cuadrícula. Si el producto tiene extras, se abre la ventana de modificadores (opciones obligatorias o no, una o varias, cantidad y nota para cocina).
   - **Cuenta activa (panel derecho):** pestañas por cuenta y cada línea con su estado (Por enviar, Enviado, Preparando, Listo, Entregado, Pagado). Lo pendiente permite cambiar la cantidad o quitarlo; lo ya enviado se cancela con motivo y PIN.
   - **Acciones del panel:**
@@ -40,7 +40,7 @@ Punto de venta por terminales, al estilo de KOLO. Decisiones del dueño:
   - Urgencia: el borde se pone ámbar a los 10 minutos y rojo a los 20.
   - Aviso: suena una alerta cuando llega una comanda nueva. La pantalla se refresca cada 8 segundos y tiene vista de «Entregadas» (últimas 6 horas) y reimpresión.
 - **Configuración (`/admin/mesas`):**
-  - Terminales: nombre, tipo (mesa, caja o para llevar), zona, personas, orden, caja y estado.
+  - Terminales: nombre, tipo (mesa o caja), zona, capacidad, orden, caja y estado.
   - Áreas de preparación: nombre, color, impresora y en qué área se prepara cada categoría (obligatorio desde el 2026-11-02).
   - Grupos de modificadores: obligatorio, varias opciones y activo, con sus opciones y precio extra, y los productos que los usan.
 
@@ -66,7 +66,7 @@ Punto de venta por terminales, al estilo de KOLO. Decisiones del dueño:
 - **Migración `2026_11_01_900001`:**
   - tablas nuevas: `areas_preparacion`, `terminales`, `grupos_modificadores`, `modificadores`, `producto_grupo_modificador`, `ordenes`, `ordenes_tickets`, `comandas` y `ordenes_items`;
   - columnas nuevas: `categorias.area_preparacion_id`, `areas_preparacion.impresora_id` y `ventas.orden_id`;
-  - datos iniciales: las áreas Cocina y Barra y las terminales CAJA 1, LLEVAR y MESA 1 a 6.
+  - datos iniciales: las áreas Cocina y Barra y las terminales CAJA 1 y MESA 1 a 6.
 - **`OrdenService`:** abrir, agregar con modificadores, actualizar, quitar o cancelar, enviar, avanzar comanda, entregar, cuentas (crear, renombrar, mover, dividir, eliminar), cobrar, cerrar, trasladar y la reacción al anular una venta.
 - **Cambios en otros servicios:**
   - `VentaService` acepta, solo desde el servidor, el precio y la descripción de la línea de una orden y la liga con `orden_id`. El cliente no puede enviar esas claves.
@@ -103,7 +103,7 @@ Punto de venta por terminales, al estilo de KOLO. Decisiones del dueño:
 - configuración y permisos.
 
 **Navegador:**
-1. Se abrió MESA 2 para 2 personas.
+1. Se abrió MESA 2.
 2. Se agregaron un Frappuccino con leche deslactosada y caramelo ($3.90), un sándwich (cocina) y pan (se entrega directo).
 3. Al enviar, salió la comanda #000001 en Cocina y Barra.
 4. En la pantalla de cocina se marcó el sándwich como terminado, y el mapa mostró «1 listo para servir».
@@ -120,7 +120,7 @@ Punto de venta por terminales, al estilo de KOLO. Decisiones del dueño:
 
 **Un ticket impreso por área.**
 - **Por qué:** el negocio trabaja con una sola tablet y entrega papel a la cocina y a la barra.
-- **Al enviar:** cada área sale en su propio ticket, con el nombre del área en grande («COCINA», «BARRA»), la mesa, el número de comanda, la hora, el mesero, las personas y solo los productos de esa área con sus extras y notas.
+- **Al enviar:** cada área sale en su propio ticket, con el nombre del área en grande («COCINA», «BARRA»), la mesa, el número de comanda, la hora, el mesero y solo los productos de esa área con sus extras y notas.
 - **Impresora de cada ticket**, en este orden:
   1. la impresora del área (`areas_preparacion.impresora_id`, en Configuración › Mesas y cocina › Áreas);
   2. la impresora de comandas predeterminada;
@@ -154,6 +154,24 @@ Punto de venta por terminales, al estilo de KOLO. Decisiones del dueño:
   - el historial de cierres tiene las columnas Abrió y Cerró, con el nombre destacado, y filtro por cajero;
   - el detalle del turno indica quién abrió y quién cerró.
 - **Prueba:** `CajaTest::test_en_tablet_compartida_quien_abre_y_cierra_se_identifica_con_pin`.
+
+## Pedidos de mostrador por cobrar (2026-11-05)
+
+En la venta rápida de la tablet, **«Enviar comanda»** manda el pedido a cocina o barra sin cobrarlo, a nombre del cliente («Juan», «#3»). Se cobra después desde **«Por cobrar»**.
+
+- **Cómo se guarda:** cada pedido es una cuenta (`ordenes_tickets`) con el nombre del cliente dentro de la orden abierta de la terminal tipo `caja` de esa caja. Así se reusa todo lo de las mesas: comandas por área, cancelación con aviso CANCELADO y PIN, extras, ingredientes, existencia apartada y cobro mixto. No hubo cambios de base de datos. La orden se cierra sola al cobrar el último pedido; el siguiente abre otra.
+- **Rutas** (`pos.vender`), en `Api/Pos/MostradorApiController`:
+  - `GET /mostrador/pedidos?caja_id=`: pedidos con algo por cobrar, más antiguos primero, y `mesas_por_cobrar` (mesas con algo por cobrar).
+  - `POST /mostrador/pedidos {uuid, caja_id, nombre, items}`: crea la cuenta, agrega los productos y envía la comanda. Es idempotente por `uuid`: un reintento no duplica la comanda.
+  - `POST /mostrador/pedidos/{ticket}/items {items}`: agrega algo más al pedido y lo envía.
+  - El cobro usa `POST /mesas/ordenes/{orden}/cobrar` con `ticket_id`; la cancelación usa `POST /mesas/items/{item}/quitar`.
+- **Comanda impresa:** el título lleva el nombre del cliente («Juan · #000123») y la línea «Mostrador · se cobra al entregar». En una mesa con varias cuentas sale además «Cuenta: …».
+- **La caja de mostrador** sigue sin poder abrirse desde el mapa de mesas (`OrdenService::abrir` con `$mostrador = true` solo desde este controlador).
+- **Cierre de turno (tablet):** antes de pedir el conteo avisa si quedan pedidos de mostrador o mesas sin cobrar.
+- **Web (2026-11-05):** el POS web tiene lo mismo que la tablet: extras al tocar el producto y al editar una línea (✎), «Ingredientes», bloqueo de agotados, «Enviar comanda» y «Por cobrar». Si la térmica no imprime, las comandas salen desde el navegador (`impresion.comandas`).
+- **Cobrar una parte:** en «Por cobrar» (web y tablet) se marcan productos y se cobran solo esos (`item_ids`); quedan «Pagado» y el resto sigue pendiente.
+- **Precuentas:** guardan solo producto y cantidad; una línea con extras, ingredientes o nota se envía con «Enviar comanda».
+- **Venta sin conexión (web):** `POST /pos/sync` acepta `modificadores`, `ajustes` y `notas`; el precio esperado incluye los extras. Si al sincronizar un extra ya no existe, la venta entra sin él y queda un conflicto.
 
 ## Limitaciones conocidas
 

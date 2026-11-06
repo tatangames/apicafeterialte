@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Support\NumeroALetras;
 use App\Exceptions\NegocioException;
 use App\Models\Caja;
 use App\Models\ConfiguracionNegocio;
@@ -76,13 +77,16 @@ class ImpresionService
         $trabajos[] = self::enviar($impresora, $doc, 'ticket', 'venta', $venta->id, $usuarioId);
 
         if ($conComandas && !$copia) {
+            $venta->loadMissing('detalles.producto:id,nombre');
+            // Con extras: el nombre solo del producto y cada extra en su renglón («* Leche»)
             $trabajos = array_merge($trabajos, self::comandas($venta->detalles->map(fn ($d) => [
                 'producto_id' => $d->producto_id,
-                'nombre'      => $d->nombre_producto,
+                'nombre'      => $d->extras ? ($d->producto?->nombre ?? $d->nombre_producto) : $d->nombre_producto,
                 'cantidad'    => (float) $d->cantidad,
                 'unidad'      => $d->unidad,
-                'notas'       => null,
-            ])->all(), "Venta {$venta->numero}", 'venta', $venta->id, $usuarioId, $impresora));
+                'notas'       => $d->extras ?? [],
+            ])->all(), ['numero' => $venta->numero, 'lugar' => 'Mostrador', 'cuenta' => $venta->cliente?->nombre],
+                'venta', $venta->id, $usuarioId, $impresora));
         }
 
         return $trabajos;
@@ -102,7 +106,8 @@ class ImpresionService
             'cantidad'    => (float) $d->cantidad,
             'unidad'      => null,
             'notas'       => $d->notas,
-        ])->all(), "{$pedido->numero} · {$pedido->nombre}", 'pedido', $pedido->id, $usuarioId, self::impresoraDeTickets(null));
+        ])->all(), ['numero' => $pedido->numero, 'lugar' => 'Pedido especial', 'cuenta' => $pedido->nombre],
+            'pedido', $pedido->id, $usuarioId, self::impresoraDeTickets(null));
 
         if (!$trabajos) {
             throw new NegocioException('No hay impresora de comandas ni de tickets configurada');
@@ -127,28 +132,103 @@ class ImpresionService
             'nombre'      => $i->nombre_producto,
             'cantidad'    => (float) $i->cantidad,
             'unidad'      => null,
-            'notas'       => collect($i->modificadores ?? [])->map(fn ($m) => "+ {$m['opcion']}")
-                ->when($i->notas, fn ($c) => $c->push($i->notas))->join(' · ') ?: null,
+            'notas'       => self::notasDeItem($i),
         ])->all();
 
         if (!$items) {
             return [];
         }
 
-        $titulo = "{$comanda->orden->terminal->nombre} · #{$comanda->numero}" . ($reimpresion ? ' (COPIA)' : '');
-        $encabezado = mb_strtoupper($comanda->area?->nombre ?? 'Comanda');
-        $extra = array_values(array_filter([
-            $comanda->usuario ? "Mesero: {$comanda->usuario->nombre}" : null,
-            $comanda->orden->comensales ? "{$comanda->orden->comensales} persona(s)" : null,
-            $comanda->notas ? "Nota: {$comanda->notas}" : null,
-        ]));
+        // La cuenta de la mesa ("Ticket 1") sale centrada, como en el formato del negocio
+        $cuentas = $comanda->items->pluck('ticket_id')->unique();
+        $cuenta = $cuentas->count() === 1 ? \App\Models\OrdenTicket::find($cuentas->first())?->nombre : null;
+        $terminal = $comanda->orden->terminal;
+
+        $datos = [
+            'numero' => $comanda->numero,
+            'area'   => $comanda->area?->nombre,
+            'lugar'  => self::lugar($terminal),
+            'cuenta' => $cuenta,
+            'extra'  => $comanda->notas ? ["Nota: {$comanda->notas}"] : [],
+            'marca'  => $reimpresion ? 'COPIA' : 'ORIGINAL',
+        ];
 
         $impresora = self::impresoraDeArea($comanda->area)
-            ?? self::impresoraDeTickets($comanda->orden->terminal->caja_id);
+            ?? self::impresoraDeTickets($terminal->caja_id);
 
         return $impresora
-            ? [self::enviar($impresora, self::comanda($items, $titulo, $impresora, $encabezado, $extra), 'comanda', 'comanda', $comanda->id, $usuarioId)]
+            ? [self::enviar($impresora, self::comanda($items, $impresora, $datos), 'comanda', 'comanda', $comanda->id, $usuarioId)]
             : [];
+    }
+
+    // "Mesa: MESA 1" para las mesas, "Mostrador" para los pedidos de caja
+    private static function lugar(\App\Models\Terminal $terminal): string
+    {
+        return match ($terminal->tipo) {
+            'mesa'  => "Mesa: {$terminal->nombre}",
+            'caja'  => 'Mostrador', // igual que la venta rápida
+            default => $terminal->nombre,
+        };
+    }
+
+    /**
+     * Aviso a cocina o barra de lo que se canceló después de enviarlo: un ticket
+     * "CANCELADO" por área, para que no lo preparen. Nunca frena la cancelación.
+     * @param \App\Models\OrdenItem[] $items
+     * @return TrabajoImpresion[]
+     */
+    public static function imprimirCancelacion(array $items, string $motivo, \App\Models\Administrador $usuario, \App\Models\Administrador $autorizador): array
+    {
+        $trabajos = [];
+        $enviados = collect($items)->filter(fn ($i) => $i->comanda_id);
+
+        foreach ($enviados->groupBy('comanda_id') as $grupo) {
+            $primero = $grupo->first();
+            $primero->loadMissing(['comanda.area.impresora', 'orden.terminal']);
+            $comanda = $primero->comanda;
+            $terminal = $primero->orden->terminal;
+
+            $lineas = $grupo->map(fn ($i) => [
+                'producto_id' => $i->producto_id,
+                'nombre'      => $i->nombre_producto,
+                'cantidad'    => (float) $i->cantidad,
+                'unidad'      => null,
+                'notas'       => self::notasDeItem($i),
+            ])->all();
+
+            $extra = array_values(array_filter([
+                "Mesero: {$usuario->nombre}",
+                $autorizador->id !== $usuario->id ? "Autorizó: {$autorizador->nombre}" : null,
+                "Motivo: {$motivo}",
+            ]));
+
+            try {
+                $impresora = self::impresoraDeArea($comanda->area) ?? self::impresoraDeTickets($terminal->caja_id);
+                if ($impresora) {
+                    $doc = self::comanda($lineas, $impresora, [
+                        'numero'    => $comanda->numero,
+                        'area'      => $comanda->area?->nombre,
+                        'lugar'     => self::lugar($terminal),
+                        'extra'     => $extra,
+                        'cancelado' => true,
+                        'marca'     => 'CANCELADO',
+                    ]);
+                    $trabajos[] = self::enviar($impresora, $doc, 'comanda', 'comanda', $comanda->id, $usuario->id);
+                }
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        }
+
+        return $trabajos;
+    }
+
+    // Debajo de cada línea, una por renglón con "*": los extras, lo que no lleva y la nota
+    private static function notasDeItem(\App\Models\OrdenItem $i): array
+    {
+        return collect($i->modificadores ?? [])->map(fn ($m) => $m['opcion'])
+            ->merge($i->textoAjustes())
+            ->when($i->notas, fn ($c) => $c->push($i->notas))->values()->all();
     }
 
     /**
@@ -202,6 +282,26 @@ class ImpresionService
         }
 
         return self::enviar($impresora, self::cierre($turno, $impresora), 'cierre', 'turno', $turno->id, $usuarioId);
+    }
+
+    /**
+     * Prueba del ticket de producción con datos de ejemplo (Mesa 1, Ice latte con extras).
+     * Usa el mismo comanda() que cocina y barra: lo que se vea aquí es lo que sale de verdad.
+     */
+    public static function pruebaProduccion(Impresora $impresora, ?int $usuarioId): TrabajoImpresion
+    {
+        $doc = self::comanda([
+            ['producto_id' => null, 'nombre' => 'Ice latte', 'cantidad' => 1, 'unidad' => null,
+                'notas' => ['saborizante caramelo', 'leche deslactosada']],
+        ], $impresora, [
+            'numero' => '031719',
+            'area'   => 'Barra',
+            'lugar'  => 'Mesa: MESA 1',
+            'cuenta' => 'Ticket 1',
+            'marca'  => 'ORIGINAL',
+        ]);
+
+        return self::enviar($impresora, $doc, 'prueba', null, null, $usuarioId);
     }
 
     public static function prueba(Impresora $impresora, ?int $usuarioId): TrabajoImpresion
@@ -267,115 +367,226 @@ class ImpresionService
     public static function ticket(Venta $venta, Impresora $impresora, bool $copia = false): EscPos
     {
         $negocio = ConfiguracionNegocio::actual();
-        $doc = new EscPos($impresora->ancho_caracteres);
-        $dinero = fn ($v) => '$' . number_format((float) $v, 2);
+        $ancho = (int) $impresora->ancho_caracteres;
+        $doc = new EscPos($ancho);
+        $numero = fn ($v) => number_format((float) $v, 2, '.', '');
 
-        $doc->alinear('centro')->negrita()->grande()->linea($negocio->nombre)->normal();
-        foreach ([$negocio->razon_social, $negocio->direccion] as $dato) {
-            if ($dato) {
-                $doc->parrafo($dato);
-            }
+        // ── Encabezado del emisor (como el recibo que ya usa el negocio) ──
+        $doc->alinear('centro')->negrita()->grande(true, false)->parrafo($negocio->razon_social ?: $negocio->nombre)->normal();
+        if ($negocio->direccion) {
+            $doc->parrafo($negocio->direccion);
         }
+        if ($negocio->razon_social) {
+            $doc->parrafo($negocio->nombre);
+        }
+        if ((string) $negocio->nit !== "") {
+            $doc->negrita()->linea("NIT: {$negocio->nit}")->normal();
+        }
+        if ((string) $negocio->nrc !== "") {
+            $doc->negrita()->linea("NRC: {$negocio->nrc}")->normal();
+        }
+        $doc->parrafo('Actividad económica:' . ($negocio->actividad_economica ? " {$negocio->actividad_economica}" : ''));
+        $doc->linea('Tipo de establecimiento:');
+        $doc->parrafo($negocio->tipo_establecimiento ?: 'Sucursal / Agencia');
         if ($negocio->telefono) {
-            $doc->linea("Tel. {$negocio->telefono}");
+            $doc->linea("Tel: {$negocio->telefono}");
         }
 
-        $doc->alinear('izquierda')->separador()
-            ->columnas("Ticket {$venta->numero}", $venta->fecha_venta->format('d/m/Y H:i'))
-            ->columnas('Atendió: ' . ($venta->usuario?->nombre ?? ''), $venta->caja?->nombre ?? '');
-
+        // ── Documento ──
+        $doc->avanzar()->separador('=')->avanzar()
+            ->negrita()->linea('Recibo')->normal();
         if ($copia) {
-            $doc->alinear('centro')->negrita()->linea('*** COPIA ***')->normal()->alinear('izquierda');
+            $doc->negrita()->linea('*** COPIA ***')->normal();
         }
         if ($venta->estado === 'anulada') {
-            $doc->alinear('centro')->negrita()->linea('*** ANULADA ***')->normal()->alinear('izquierda');
+            $doc->negrita()->linea('*** ANULADA ***')->normal();
         }
-        if ($venta->cliente) {
-            $doc->parrafo('Cliente: ' . $venta->cliente->nombre . ($venta->cliente->documento ? " ({$venta->cliente->documento})" : ''));
+        $doc->linea('Fecha y hora de generación:')
+            ->negrita()->linea($venta->fecha_venta->format('d/m/Y H:i'))->normal()
+            ->alinear('izquierda')
+            ->columnas('Emisor', trim($negocio->nombre . ' ' . ($venta->caja?->nombre ?? '')));
+
+        // ── Receptor ──
+        $doc->avanzar()->separador('=')->avanzar()
+            ->alinear('centro')->negrita()->grande(true, false)->linea('Datos del receptor')->normal()
+            ->alinear('izquierda')
+            ->parrafo('Nombre: ' . ($venta->cliente?->nombre ?: 'Consumidor Final'));
+        if ($venta->cliente?->documento) {
+            $doc->parrafo("DUI/NIT: {$venta->cliente->documento}");
         }
+        $doc->parrafo('Dirección: ' . ($venta->cliente?->direccion ?: 'Ciudad'))
+            ->linea("No. de Venta: {$venta->numero}");
         if ($venta->pedido?->tipo === 'especial') {
-            $doc->linea("Pedido {$venta->pedido->numero}");
+            $doc->linea("Pedido: {$venta->pedido->numero}");
         }
 
-        $doc->separador();
+        // ── Detalle: Cant | Descripción | Precio | Total ──
+        $cCant = 6;
+        $cNum = $ancho >= 42 ? 8 : 7;
+        $cDesc = $ancho - $cCant - $cNum * 2;
+        $fila = function (string $cant, string $desc, string $precio, string $total) use ($cCant, $cDesc, $cNum) {
+            return str_pad(mb_substr($cant, 0, $cCant), $cCant)
+                . self::rellenar(mb_substr($desc, 0, $cDesc), $cDesc)
+                . str_pad(mb_substr($precio, 0, $cNum), $cNum, ' ', STR_PAD_LEFT)
+                . str_pad(mb_substr($total, 0, $cNum), $cNum, ' ', STR_PAD_LEFT);
+        };
+
+        $doc->avanzar()->separador('=')->avanzar()
+            ->negrita()->linea($fila('Cant', 'Descripción', 'Precio', 'Total'))->normal();
         foreach ($venta->detalles as $d) {
-            $cantidad = rtrim(rtrim(number_format((float) $d->cantidad, 3, '.', ''), '0'), '.');
-            $unidad = $d->unidad && $d->unidad !== 'u' ? " {$d->unidad}" : '';
-            $doc->parrafo($d->nombre_producto)
-                ->columnas("  {$cantidad}{$unidad} x " . $dinero($d->precio_unitario), $dinero((float) $d->cantidad * (float) $d->precio_unitario));
+            // La descripción larga sigue en las líneas de abajo, en su misma columna
+            $partes = explode("\n", wordwrap($d->nombre_producto, max($cDesc - 1, 8), "\n", true));
+            $doc->linea($fila($numero($d->cantidad), array_shift($partes), $numero($d->precio_unitario), $numero((float) $d->cantidad * (float) $d->precio_unitario)));
+            foreach ($partes as $resto) {
+                $doc->linea(str_repeat(' ', $cCant) . $resto);
+            }
             if ((float) $d->descuento > 0) {
-                $doc->columnas('  Descuento', '-' . $dinero($d->descuento));
+                $doc->linea($fila('', 'Descuento', '', '-' . $numero($d->descuento)));
             }
         }
 
-        $doc->separador();
+        $doc->alinear('derecha');
         if ((float) $venta->descuento_total > 0) {
-            $doc->columnas('Subtotal', $dinero((float) $venta->subtotal + (float) $venta->descuento_lineas));
-            if ((float) $venta->descuento_lineas > 0) {
-                $doc->columnas('Descuentos', '-' . $dinero($venta->descuento_lineas));
-            }
+            $doc->linea('Subtotal: $ ' . $numero((float) $venta->subtotal + (float) $venta->descuento_lineas));
             if ((float) $venta->descuento_global > 0) {
-                $doc->columnas('Descuento general', '-' . $dinero($venta->descuento_global));
+                $doc->linea('Descuento: -$ ' . $numero($venta->descuento_global));
             }
         }
-
-        $doc->negrita()->grande(true, false)->columnas('TOTAL', $dinero($venta->total))->normal()
-            ->separador();
-
+        $doc->negrita()->linea('Total: $ ' . $numero($venta->total))->normal();
         if ((float) $venta->anticipo_aplicado > 0) {
-            $doc->columnas('Anticipo recibido', $dinero($venta->anticipo_aplicado));
+            $doc->linea('Anticipo recibido: $ ' . $numero($venta->anticipo_aplicado))
+                ->linea('Pagado hoy: $ ' . $numero((float) $venta->total - (float) $venta->anticipo_aplicado));
         }
+
+        $doc->alinear('izquierda')
+            ->linea('Total en letras:')
+            ->parrafo(NumeroALetras::dolares((float) $venta->total))
+            ->parrafo('Condición de la operación: ' . self::condicion($venta));
         foreach ($venta->pagos as $p) {
-            $doc->columnas($p->metodoPago?->nombre ?? 'Pago', $dinero($p->monto_recibido ?? $p->monto));
             if ($p->referencia) {
-                $doc->columnas('  Ref.', $p->referencia);
+                $doc->parrafo(($p->metodoPago?->nombre ?? 'Pago') . " ref. {$p->referencia}");
             }
         }
         if ((float) $venta->cambio > 0) {
-            $doc->negrita()->columnas('Cambio', $dinero($venta->cambio))->normal();
+            $doc->linea('Efectivo recibido: $ ' . $numero($venta->pagos->sum(fn ($p) => (float) ($p->monto_recibido ?? 0))))
+                ->linea('Cambio: $ ' . $numero($venta->cambio));
         }
         if ($venta->cuentaCobrar) {
-            // Venta al crédito: el cliente firma el ticket
-            $doc->linea('Credito: vence el ' . $venta->cuentaCobrar->fecha_vencimiento->format('d/m/Y'))
-                ->linea('')->linea('')->alinear('centro')
+            // Venta al crédito: el cliente firma el recibo
+            $doc->linea('Crédito: vence el ' . $venta->cuentaCobrar->fecha_vencimiento->format('d/m/Y'))
+                ->avanzar(2)->alinear('centro')
                 ->linea('______________________________')->linea('Firma del cliente')->alinear('izquierda');
         }
 
-        $doc->separador()->alinear('centro');
-        if ($negocio->mensaje_ticket) {
-            $doc->parrafo($negocio->mensaje_ticket);
-        }
-        $doc->linea(strtoupper(substr($venta->uuid, 0, 8)));
+        $doc->avanzar()->separador('=')->avanzar()->alinear('centro');
+        $doc->parrafo($negocio->mensaje_ticket ?: 'Muchas gracias por su compra.');
 
         return $doc;
     }
 
-    /**
-     * Comanda: lista grande y simple para preparar (sin precios).
-     * @param array $items [['producto_id','nombre','cantidad','unidad','notas'], ...]
-     */
-    public static function comanda(array $items, string $titulo, Impresora $impresora, string $encabezado = 'COMANDA', array $extra = []): EscPos
+    // Contado (Efectivo, Tarjeta, Transferencia...) o Crédito, como dice el recibo
+    public static function condicion(Venta $venta): string
     {
-        $doc = new EscPos($impresora->ancho_caracteres);
-
-        $doc->alinear('centro')->negrita()->grande()->linea($encabezado)->normal()
-            ->negrita()->linea($titulo)->normal()
-            ->linea(now()->format('d/m/Y H:i'));
-        foreach ($extra as $linea) {
-            $doc->parrafo($linea, $impresora->ancho_caracteres);
+        $metodos = $venta->pagos->map(fn ($p) => $p->metodoPago?->nombre)->filter()->unique()->values();
+        if ($venta->anticipo_aplicado > 0 && $metodos->isEmpty()) {
+            return 'Anticipo';
         }
-        $doc->alinear('izquierda')->separador();
+        return $metodos->isEmpty() ? 'Efectivo' : $metodos->join(', ', ' y ');
+    }
+
+    // str_pad que cuenta letras con tilde como un solo carácter
+    private static function rellenar(string $texto, int $ancho): string
+    {
+        return $texto . str_repeat(' ', max($ancho - mb_strlen($texto), 0));
+    }
+
+    /**
+     * Comanda (solicitud de producción) con el formato del negocio, sin precios:
+     *   #031719 / PANADERIA EDUARDO / Solicitud de producción / área
+     *   Mesa: MESA 1, fecha a la izquierda y hora a la derecha, ====, la cuenta
+     *   ("Ticket 1") centrada, CANT  DESCRIPCIÓN con los extras debajo ("* leche
+     *   deslactosada") y al final ORIGINAL o COPIA.
+     * @param array $items [['producto_id','nombre','cantidad','unidad','notas' (texto o lista)], ...]
+     * @param array $datos numero, area, lugar, cuenta, extra[], marca, cancelado
+     */
+    public static function comanda(array $items, Impresora $impresora, array $datos = []): EscPos
+    {
+        $ancho = $impresora->ancho_caracteres;
+        $doc = new EscPos($ancho);
+        $negocio = ConfiguracionNegocio::actual();
+        $cCant = 8; // ancho de la columna CANT
+        $cDesc = $ancho - $cCant;
+
+        // Todo en negrita y doble alto (letra alta y angosta como la del negocio; el ancho de columnas no cambia)
+        $alto = fn () => $doc->negrita()->grande(true, false);
+
+        $doc->alinear('centro');
+        if (!empty($datos['numero'])) {
+            $doc->negrita()->grande(true, false)->linea('#' . $datos['numero']);
+        }
+        $doc->negrita()->grande(true, false)->parrafo(mb_strtoupper($negocio->nombre ?? 'Panadería Eduardo'), $ancho);
+        $alto()->linea('Solicitud de producción');
+        // Cada área sale en su propio ticket: el nombre en grande dice a quién le toca
+        // (Cocina y Barra pueden imprimir en la misma impresora). Sin área: comanda general.
+        if (!empty($datos['area'])) {
+            $doc->avanzar()->negrita()->grande()->linea('** ' . mb_strtoupper($datos['area']) . ' **');
+        }
+        if (!empty($datos['cancelado'])) {
+            $doc->avanzar()->negrita()->grande()->linea('** CANCELADO **');
+            $alto()->linea('No preparar lo siguiente');
+        }
+
+        $alto();
+        $doc->alinear('izquierda')->avanzar();
+        if (!empty($datos['lugar'])) {
+            $doc->parrafo($datos['lugar'], $ancho);
+        }
+        foreach ($datos['extra'] ?? [] as $linea) {
+            $doc->parrafo($linea, $ancho);
+        }
+        $doc->avanzar()->linea(now()->format('d/m/Y'))
+            ->alinear('derecha')->linea(now()->format('H:i'))->alinear('izquierda')
+            ->normal()->separador('=');
+        $alto();
+
+        if (!empty($datos['cuenta'])) {
+            $doc->avanzar()->alinear('centro')->linea($datos['cuenta'])->alinear('izquierda');
+        }
+        $doc->avanzar()->linea(self::rellenar('CANT', $cCant) . 'DESCRIPCIÓN');
 
         foreach ($items as $i) {
             $cantidad = rtrim(rtrim(number_format((float) $i['cantidad'], 3, '.', ''), '0'), '.');
             $unidad = $i['unidad'] && $i['unidad'] !== 'u' ? " {$i['unidad']}" : '';
-            $doc->negrita()->grande(true, false)->parrafo("{$cantidad}{$unidad}  {$i['nombre']}", $impresora->ancho_caracteres)->normal();
-            if (!empty($i['notas'])) {
-                $doc->parrafo("   > {$i['notas']}");
+            foreach (self::envolver($i['nombre'], $cDesc) as $n => $texto) {
+                $doc->linea(self::rellenar($n === 0 ? $cantidad . $unidad : '', $cCant) . $texto);
+            }
+            $notas = is_array($i['notas'] ?? null) ? $i['notas'] : array_filter([$i['notas'] ?? null]);
+            foreach ($notas as $nota) {
+                foreach (self::envolver($nota, $cDesc - 2) as $n => $texto) {
+                    $doc->linea(str_repeat(' ', $cCant) . ($n === 0 ? '* ' : '  ') . $texto);
+                }
             }
         }
 
-        return $doc->separador();
+        $doc->avanzar()->alinear('centro')->linea($datos['marca'] ?? 'ORIGINAL')->normal()->alinear('izquierda');
+
+        return $doc;
+    }
+
+    // Parte un texto en renglones de $ancho sin cortar palabras (cuenta las tildes como una letra)
+    private static function envolver(string $texto, int $ancho): array
+    {
+        $lineas = [''];
+        foreach (preg_split('/\s+/u', trim($texto)) as $palabra) {
+            $actual = end($lineas);
+            $junto = $actual === '' ? $palabra : "{$actual} {$palabra}";
+            if (mb_strlen($junto) <= $ancho || $actual === '') {
+                $lineas[count($lineas) - 1] = $junto;
+            } else {
+                $lineas[] = $palabra;
+            }
+        }
+        return $lineas;
     }
 
     public static function cierre(TurnoCaja $turno, Impresora $impresora): EscPos
@@ -466,7 +677,7 @@ class ImpresionService
      * en una comanda general. Sin impresora de comandas se usa $respaldo (la de tickets).
      * @return TrabajoImpresion[]
      */
-    private static function comandas(array $items, string $titulo, string $documentoTipo, int $documentoId, ?int $usuarioId, ?Impresora $respaldo = null): array
+    private static function comandas(array $items, array $datos, string $documentoTipo, int $documentoId, ?int $usuarioId, ?Impresora $respaldo = null): array
     {
         $areaPorProducto = Producto::with('categorias.area.impresora')
             ->whereIn('id', collect($items)->pluck('producto_id'))
@@ -478,7 +689,7 @@ class ImpresionService
             $area = $areaId ? $areaPorProducto[$delArea->first()['producto_id']] : null;
             $impresora = self::impresoraDeArea($area) ?? $respaldo;
             if ($impresora) {
-                $trabajos[] = self::enviar($impresora, self::comanda($delArea->all(), $titulo, $impresora, mb_strtoupper($area?->nombre ?? 'Comanda')),
+                $trabajos[] = self::enviar($impresora, self::comanda($delArea->all(), $impresora, $datos + ['area' => $area?->nombre]),
                     'comanda', $documentoTipo, $documentoId, $usuarioId);
             }
         }

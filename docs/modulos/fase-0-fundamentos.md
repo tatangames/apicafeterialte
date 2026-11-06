@@ -61,7 +61,7 @@ Una sola fila: datos fiscales, logo, moneda, IVA, si los precios incluyen IVA, s
 
 ### Correlativos — tabla `correlativos`
 
-`CorrelativoService::siguiente('venta')` devuelve `T-000001`, `T-000002`, etc. Bloquea la fila, así que dentro de una transacción no se repiten números entre cajas. Se siembran `venta` (T), `devolucion` (DEV), `orden_compra` (OC), `compra` (C), `produccion` (PR) y `pedido` (P).
+`CorrelativoService::siguiente('venta')` devuelve `000001`, `000002`, etc. (desde 2026-11-05 el ticket no lleva prefijo; las ventas anteriores conservan su T-). Bloquea la fila, así que dentro de una transacción no se repiten números entre cajas. Se siembran `venta` (sin prefijo), `devolucion` (DEV), `orden_compra` (OC), `compra` (C), `produccion` (PR) y `pedido` (P).
 
 ### Inventario
 

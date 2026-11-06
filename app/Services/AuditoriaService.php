@@ -50,7 +50,7 @@ class AuditoriaService
     private static function limpiar(array $datos): array
     {
         return collect($datos)
-            ->except(['password', 'remember_token', 'password_confirmation'])
+            ->except(['password', 'remember_token', 'password_confirmation', 'pin', 'pin_confirmation', 'autorizacion'])
             ->toArray();
     }
 }

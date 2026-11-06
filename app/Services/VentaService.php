@@ -10,6 +10,8 @@ use App\Models\MetodoPago;
 use App\Models\MovimientoInventario;
 use App\Models\Pedido;
 use App\Models\Producto;
+use App\Models\Modificador;
+use App\Models\OrdenItem;
 use App\Models\Receta;
 use App\Models\TurnoCaja;
 use App\Models\Venta;
@@ -48,6 +50,7 @@ class VentaService
             $resultado[] = [
                 'producto'        => $producto,
                 'nombre'          => $l['nombre'] ?? $producto->nombre,
+                'extras'          => $l['extras'] ?? [],
                 'cantidad'        => $cantidad,
                 'precio_unitario' => $precio,
                 'importe'         => $importe,
@@ -55,6 +58,8 @@ class VentaService
                 'descuento_valor' => $descuento > 0 ? (float) $l['descuento_valor'] : 0,
                 'descuento'       => $descuento,
                 'subtotal'        => round($importe - $descuento, 2),
+                'modificadores'   => $l['modificadores'] ?? [],
+                'ajustes'         => $l['ajustes'] ?? [],
             ];
 
             $bruto += $importe;
@@ -114,44 +119,88 @@ class VentaService
      * - un producto con existencia (pan, gaseosa) sale él mismo;
      * - uno con receta de venta (limonada, plato, servicio) saca sus insumos;
      * - uno sin existencia ni receta no mueve inventario.
+     * Además, cada extra elegido que gasta un insumo (fresa, miel) lo saca.
      * El consumo interno sale con su propio tipo para separarlo de lo vendido.
      */
     private static function descontarInventario(Producto $producto, ?Receta $receta, float $cantidad, string $numero,
-        int $ventaId, int $usuarioId, bool $offline, ConfiguracionNegocio $config, array &$conflictos): float
+        int $ventaId, int $usuarioId, bool $offline, ConfiguracionNegocio $config, array &$conflictos, array $modificadores = [],
+        array $ajustes = []): float
     {
         $tipo = $producto->consumo_interno ? 'consumo_interno' : 'venta';
+        $porReceta = !$producto->controla_stock && $receta !== null;
         $salidas = match (true) {
-            $producto->controla_stock => [['producto_id' => $producto->id, 'cantidad' => $cantidad]],
-            $receta !== null          => ProduccionService::consumoDeVenta($receta, $cantidad),
+            $producto->controla_stock => [['producto_id' => $producto->id, 'cantidad' => $cantidad, 'calculado' => false]],
+            $porReceta                => array_map(fn ($s) => [...$s, 'calculado' => true], ProduccionService::consumoDeVenta($receta, $cantidad)),
             default                   => [],
         };
-        if (!$salidas) {
-            return (float) $producto->costo_unitario;
+        // Lo que el cliente pidió distinto ("solo 1 huevo", "sin queso"): se descuenta lo que de verdad salió
+        if ($porReceta && $ajustes) {
+            $salidas = array_values(array_filter(array_map(function ($s) use ($ajustes) {
+                if (isset($ajustes[$s['producto_id']])) {
+                    $s['cantidad'] = round($s['cantidad'] * (float) $ajustes[$s['producto_id']], 4);
+                }
+                return $s;
+            }, $salidas), fn ($s) => $s['cantidad'] > 0));
+        }
+        $extras = self::consumoDeModificadores($modificadores, $cantidad);
+        if (!$salidas && !$extras) {
+            return $porReceta ? 0.0 : (float) $producto->costo_unitario;
         }
 
-        $costo = 0.0;
-        foreach ($salidas as $s) {
+        // Sin existencia ni receta, el producto base cuesta lo que diga su ficha
+        $costo = ($salidas || $porReceta) ? 0.0 : (float) $producto->costo_unitario * $cantidad;
+        $motivo = $receta ? "Venta {$numero}: {$producto->nombre}" : "Venta {$numero}";
+        foreach ([...$salidas, ...$extras] as $s) {
             $mov = InventarioService::aplicarMovimiento(
                 productoId:     $s['producto_id'],
                 tipo:           $tipo,
                 cantidad:       $s['cantidad'],
-                motivo:         $receta ? "Venta {$numero}: {$producto->nombre}" : "Venta {$numero}",
+                motivo:         isset($s['extra']) ? "Venta {$numero}: {$s['extra']} en {$producto->nombre}" : $motivo,
                 referenciaTipo: 'venta',
                 referenciaId:   $ventaId,
                 usuarioId:      $usuarioId,
                 forzarNegativo: $offline,
-                calculado:      $receta !== null,
+                calculado:      $s['calculado'],
             );
             $costo += (float) $mov->costo_unitario * $s['cantidad'];
 
             if ($offline && (float) $mov->stock_resultante < 0 && !$config->permitir_stock_negativo) {
-                $nombre = $receta ? $mov->producto?->nombre . " (para {$producto->nombre})" : $producto->nombre;
+                $nombre = $s['calculado'] ? $mov->producto?->nombre . " (para {$producto->nombre})" : $producto->nombre;
                 $conflictos[] = "{$nombre}: no había existencia suficiente (quedó en "
                     . rtrim(rtrim(number_format((float) $mov->stock_resultante, 4, '.', ''), '0'), '.') . ')';
             }
         }
 
         return round($costo / $cantidad, 4);
+    }
+
+    /**
+     * Insumos que gastan los extras elegidos (Fresa: 30 g por porción), en la unidad del insumo.
+     * Se leen de la configuración actual de cada opción, aunque ya esté desactivada.
+     */
+    public static function consumoDeModificadores(array $ids, float $cantidad): array
+    {
+        if (!$ids) {
+            return [];
+        }
+
+        return Modificador::with(['insumo.unidadMedida', 'unidad'])
+            ->whereIn('id', $ids)->whereNotNull('producto_id')->get()
+            ->filter(fn (Modificador $m) => $m->insumo?->controla_stock && (float) $m->cantidad > 0)
+            ->map(function (Modificador $m) use ($cantidad) {
+                $base = $m->insumo->unidadMedida;
+                $porUnidad = $base && $m->unidad ? $m->unidad->convertirA((float) $m->cantidad, $base) : (float) $m->cantidad;
+
+                return [
+                    'producto_id' => $m->producto_id,
+                    'cantidad'    => round($porUnidad * $cantidad, 4),
+                    'calculado'   => true,
+                    'extra'       => $m->nombre,
+                ];
+            })
+            ->filter(fn ($s) => $s['cantidad'] > 0)
+            ->values()
+            ->all();
     }
 
     /**
@@ -177,6 +226,39 @@ class VentaService
             }
 
             $precio = null;
+            $nombre = $item['nombre_orden'] ?? null;
+            $modificadores = $item['modificadores_orden'] ?? [];
+            $ajustes = $item['ajustes_orden'] ?? [];
+            $extras = []; // para la comanda: un renglón por extra, cambio de receta y nota
+            // Venta directa con extras ("azúcar extra") o receta cambiada ("sin huevo"): el precio
+            // lleva los extras, el nombre los muestra en ticket y comanda y el inventario baja lo que salió
+            $precioEsperado = (float) $producto->precio_venta;
+            if (!isset($item['precio_orden']) && (!empty($item['modificadores']) || !empty($item['ajustes']) || !empty($item['notas']))) {
+                try {
+                    [$elegidos, $extra] = OrdenService::resolverModificadores($producto, $item['modificadores'] ?? []);
+                    $resueltos = OrdenService::resolverAjustes($producto, $item['ajustes'] ?? []);
+                } catch (NegocioException $e) {
+                    // Una venta sin conexión ya ocurrió: si el extra o la receta cambiaron, se registra sin ellos
+                    if (!$offline) {
+                        throw $e;
+                    }
+                    $conflictos[] = "{$producto->nombre}: {$e->getMessage()} (se registró sin extras ni cambios de receta)";
+                    [$elegidos, $extra, $resueltos] = [[], 0.0, null];
+                }
+                $linea = new OrdenItem([
+                    'nombre_producto' => $producto->nombre,
+                    'modificadores'   => $elegidos ?: null,
+                    'ajustes'         => $resueltos,
+                ]);
+                $nota = trim((string) ($item['notas'] ?? ''));
+                $nombre = mb_substr($linea->descripcion() . ($nota !== '' ? " · {$nota}" : ''), 0, 300);
+                $extras = collect($elegidos)->pluck('opcion')->merge($linea->textoAjustes())
+                    ->when($nota !== '', fn ($c) => $c->push($nota))->filter()->values()->all();
+                $modificadores = collect($elegidos)->pluck('id')->all();
+                $ajustes = $linea->factoresAjuste();
+                $precioEsperado = round((float) $producto->precio_venta + $extra, 2);
+                $precio = $precioEsperado;
+            }
             // Líneas de una orden de mesa: el precio (base + modificadores) lo calculó el servidor
             // al tomar la orden. El cliente no puede enviar estas claves: la validación las descarta.
             if (isset($item['precio_orden'])) {
@@ -188,9 +270,9 @@ class VentaService
                 }
                 if (isset($item['precio_unitario'])) {
                     $precio = round((float) $item['precio_unitario'], 2);
-                    if (abs($precio - (float) $producto->precio_venta) > 0.001) {
+                    if (abs($precio - $precioEsperado) > 0.001) {
                         $conflictos[] = "{$producto->nombre}: se cobró a $" . number_format($precio, 2)
-                            . ' y el precio actual es $' . number_format((float) $producto->precio_venta, 2);
+                            . ' y el precio actual es $' . number_format($precioEsperado, 2);
                     }
                 }
             }
@@ -207,7 +289,10 @@ class VentaService
 
             return [
                 'producto'        => $producto,
-                'nombre'          => $item['nombre_orden'] ?? null,
+                'nombre'          => $nombre,
+                'extras'          => $extras,
+                'modificadores'   => $modificadores,
+                'ajustes'         => $ajustes,
                 'cantidad'        => $cantidad,
                 'precio'          => $precio,
                 'descuento_tipo'  => $item['descuento_tipo'] ?? null,
@@ -231,13 +316,13 @@ class VentaService
 
         if ($porcentaje > $maximo + 0.001) {
             return AutorizacionService::autorizar($usuario, 'pos.descuento.autorizar',
-                'El descuento (' . round($porcentaje, 1) . "%) supera el máximo de {$maximo}%: solo lo puede hacer el administrador");
+                'El descuento (' . round($porcentaje, 1) . "%) supera el máximo de {$maximo}%: necesita autorización del administrador");
         }
 
         // Dentro del máximo basta el permiso de aplicar descuentos
         if (!$usuario->can('pos.descuento')) {
             return AutorizacionService::autorizar($usuario, 'pos.descuento.autorizar',
-                'No tienes permiso para aplicar descuentos: solo lo puede hacer el administrador');
+                'No tienes permiso para aplicar descuentos: necesita autorización del administrador');
         }
 
         return null;
@@ -390,7 +475,7 @@ class VentaService
                     }
                 }
 
-                $numero = CorrelativoService::siguiente('venta', 'T');
+                $numero = CorrelativoService::siguiente('venta');
 
                 $venta = Venta::create([
                     'uuid'                     => $datos['uuid'],
@@ -429,12 +514,13 @@ class VentaService
                     /** @var Producto $producto */
                     $producto = $l['producto'];
                     $costo = self::descontarInventario($producto, $recetas->get($producto->id), $l['cantidad'],
-                        $numero, $venta->id, $usuario->id, $offline, $config, $conflictos);
+                        $numero, $venta->id, $usuario->id, $offline, $config, $conflictos, $l['modificadores'] ?? [], $l['ajustes'] ?? []);
 
                     VentaDetalle::create([
                         'venta_id'        => $venta->id,
                         'producto_id'     => $producto->id,
                         'nombre_producto' => $l['nombre'],
+                        'extras'          => $l['extras'] ?: null,
                         'unidad'          => $producto->unidadMedida?->abreviatura,
                         'cantidad'        => $l['cantidad'],
                         'precio_unitario' => $l['precio_unitario'],
@@ -540,6 +626,11 @@ class VentaService
                 : 'No hay un turno abierto en esta caja. Abre el turno para vender.');
         }
 
+        // En línea se vende en el turno propio; lo vendido sin conexión ya ocurrió y no se rechaza
+        if (!$offline) {
+            CajaService::exigirTurnoPropio($turno);
+        }
+
         if ($offline && !empty($datos['turno_id']) && (int) $datos['turno_id'] !== $turno->id) {
             $conflictos[] = "El turno #{$datos['turno_id']} ya estaba cerrado: se registró en el turno #{$turno->id}";
         }
@@ -553,7 +644,7 @@ class VentaService
      */
     public static function anular(Venta $venta, string $motivo, Administrador $usuario): Venta
     {
-        $autorizador = AutorizacionService::autorizar($usuario, 'pos.anular', 'Anular una venta solo lo puede hacer el administrador');
+        $autorizador = AutorizacionService::autorizar($usuario, 'pos.anular', 'Anular una venta necesita autorización del administrador');
 
         return DB::transaction(function () use ($venta, $motivo, $usuario, $autorizador) {
             $venta = Venta::whereKey($venta->id)->lockForUpdate()->first();

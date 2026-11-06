@@ -12,8 +12,8 @@ class FundamentosTest extends TestCase
 {
     public function test_correlativo_es_consecutivo_y_con_prefijo(): void
     {
-        $this->assertSame('T-000001', CorrelativoService::siguiente('venta'));
-        $this->assertSame('T-000002', CorrelativoService::siguiente('venta'));
+        $this->assertSame('000001', CorrelativoService::siguiente('venta'));
+        $this->assertSame('000002', CorrelativoService::siguiente('venta'));
         $this->assertSame('OC-000001', CorrelativoService::siguiente('orden_compra'));
     }
 
@@ -45,22 +45,24 @@ class FundamentosTest extends TestCase
             'simbolo_moneda'                 => '$',
             'permitir_stock_negativo'        => false,
             'descuento_max_sin_autorizacion' => 15,
+            'cierre_ciego'                   => true,
         ])->assertOk()->assertJsonPath('data.permitir_stock_negativo', false);
 
-        $this->assertDatabaseHas('configuracion_negocio', ['telefono' => '2222-0000']);
+        $this->assertDatabaseHas('configuracion_negocio', ['telefono' => '2222-0000', 'descuento_max_sin_autorizacion' => 15, 'cierre_ciego' => true]);
         $this->assertDatabaseHas('auditorias', ['modulo' => 'configuracion', 'accion' => 'actualizar']);
     }
 
-    public function test_sin_pin_cada_quien_autoriza_solo_con_sus_permisos(): void
+    public function test_autoriza_quien_tiene_el_permiso_o_su_pin(): void
     {
-        // Ya no hay verificación de PIN: el que tiene el permiso lo hace, el que no, no
-        $this->actuarComo('mesero');
-        $this->postJson('/api/autorizaciones/pin', ['pin' => '1234', 'permiso' => 'pos.anular'])->assertNotFound();
-
         $mesero = $this->crearUsuario('mesero');
-        $admin = $this->crearUsuario('admin');
+        $admin = $this->crearUsuario('admin', ['pin' => '9876']);
         $this->assertSame($admin->id, AutorizacionService::autorizar($admin, 'pos.anular', 'Anular')->id);
 
+        // El mesero no puede solo, pero sí con el PIN del administrador
+        request()->merge(['autorizacion' => '9876']);
+        $this->assertSame($admin->id, AutorizacionService::autorizar($mesero, 'pos.anular', 'Anular')->id);
+
+        request()->merge(['autorizacion' => null]);
         $this->expectException(AutorizacionRequeridaException::class);
         AutorizacionService::autorizar($mesero, 'pos.anular', 'Anular');
     }

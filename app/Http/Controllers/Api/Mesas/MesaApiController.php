@@ -5,14 +5,20 @@ namespace App\Http\Controllers\Api\Mesas;
 use App\Http\Controllers\Api\Pos\VentaApiController;
 use App\Http\Controllers\Controller;
 use App\Models\Comanda;
+use Illuminate\Support\Collection;
+use App\Services\VentaService;
+use App\Models\Inventario;
+use App\Models\ConfiguracionNegocio;
 use App\Models\GrupoModificador;
 use App\Models\Orden;
 use App\Models\OrdenItem;
 use App\Models\OrdenTicket;
 use App\Models\Producto;
+use App\Models\Receta;
 use App\Models\Terminal;
 use App\Services\ImpresionService;
 use App\Services\OrdenService;
+use App\Services\ProduccionService;
 use Illuminate\Http\Request;
 
 class MesaApiController extends Controller
@@ -44,7 +50,10 @@ class MesaApiController extends Controller
             'precio_unitario' => (float) $i->precio_unitario,
             'subtotal'        => $i->subtotal(),
             'modificadores'   => $i->modificadores ?? [],
+            'ajustes'         => $i->ajustes ?? [],
+            'texto_ajustes'   => $i->textoAjustes(),
             'notas'           => $i->notas,
+            'motivo_cancelacion' => $i->motivo_cancelacion,
             'estado'          => $i->estado,
             'area'            => $i->area?->nombre,
             'comanda'         => $i->comanda?->numero,
@@ -64,6 +73,10 @@ class MesaApiController extends Controller
             'numero'       => $c->numero,
             'orden_id'     => $c->orden_id,
             'terminal'     => $c->orden->terminal->nombre,
+            'terminal_tipo' => $c->orden->terminal->tipo,
+            // La cuenta ("Ticket 1", "Juan") cuando toda la comanda es de una sola, como en el ticket térmico
+            'cuenta'       => ($cuentas = $c->items->pluck('ticket_id')->unique())->count() === 1
+                ? \App\Models\OrdenTicket::find($cuentas->first())?->nombre : null,
             'area'         => $c->area?->nombre,
             'color'        => $c->area?->color ?? '#6b7280',
             'estado'       => $c->estado,
@@ -79,6 +92,7 @@ class MesaApiController extends Controller
                 'cantidad'      => (float) $i->cantidad,
                 'modificadores' => collect($i->modificadores ?? [])->pluck('opcion')->all(),
                 'notas'         => $i->notas,
+                'ajustes'       => $i->textoAjustes(),
                 'cancelado'     => $i->estado === 'cancelado',
             ]),
         ];
@@ -170,10 +184,19 @@ class MesaApiController extends Controller
         $productos = Producto::with(['categorias:id,nombre', 'gruposModificadores:id', 'inventario:producto_id,stock_actual'])
             ->where('activo', true)->where('se_vende', true)->orderBy('orden_pos')->orderBy('nombre')->get();
 
+        // Lo que lleva cada plato con receta de venta: el mesero puede quitar o aumentar sin cambiar el precio
+        $recetas = Receta::with(['ingredientes.producto.unidadMedida', 'ingredientes.unidad'])
+            ->whereIn('producto_id', $productos->where('controla_stock', false)->pluck('id'))
+            ->where('activa', true)->where('uso', 'venta')->get()->keyBy('producto_id');
+
         $grupos = GrupoModificador::with(['opciones' => fn ($q) => $q->where('activo', true)])->where('activo', true)->get();
+        // Lo que ya está en otras cuentas abiertas no está disponible para vender
+        $apartado = OrdenService::apartado($productos->where('controla_stock', true)->pluck('id')->all());
+        $agotadas = self::opcionesAgotadas($grupos);
 
         return response()->json([
             'success'    => 1,
+            'permitir_stock_negativo' => (bool) \App\Models\ConfiguracionNegocio::actual()->permitir_stock_negativo,
             'productos'  => $productos->map(fn (Producto $p) => [
                 'id'               => $p->id,
                 'nombre'           => $p->nombre,
@@ -186,6 +209,8 @@ class MesaApiController extends Controller
                 'categorias'       => $p->categorias->pluck('id'),
                 'grupos'           => $p->gruposModificadores->pluck('id'),
                 'stock'            => $p->controla_stock ? (float) ($p->inventario?->stock_actual ?? 0) : null,
+                'disponible'       => $p->controla_stock ? round((float) ($p->inventario?->stock_actual ?? 0) - ($apartado->get($p->id) ?? 0), 4) : null,
+                'receta'           => $recetas->has($p->id) ? ProduccionService::ingredientesPorUnidad($recetas->get($p->id)) : [],
             ]),
             'categorias' => $productos->flatMap->categorias->unique('id')->sortBy('nombre')->map(fn ($c) => ['id' => $c->id, 'nombre' => $c->nombre])->values(),
             'grupos'     => $grupos->map(fn (GrupoModificador $g) => [
@@ -193,9 +218,33 @@ class MesaApiController extends Controller
                 'nombre'      => $g->nombre,
                 'obligatorio' => $g->obligatorio,
                 'multiple'    => $g->multiple,
-                'opciones'    => $g->opciones->map(fn ($o) => ['id' => $o->id, 'nombre' => $o->nombre, 'precio' => (float) $o->precio]),
+                'opciones'    => $g->opciones->map(fn ($o) => ['id' => $o->id, 'nombre' => $o->nombre, 'precio' => (float) $o->precio,
+                    // Sin stock negativo: la opción cuyo insumo ya no alcanza para una porción
+                    'agotado' => $agotadas->contains($o->id)]),
             ]),
         ]);
+    }
+
+    /**
+     * Opciones de extras cuyo insumo no alcanza para una porción (Leche entera sin
+     * existencia), contando lo apartado en cuentas abiertas. Con stock negativo, ninguna.
+     */
+    public static function opcionesAgotadas($grupos): Collection
+    {
+        if (ConfiguracionNegocio::actual()->permitir_stock_negativo) {
+            return collect();
+        }
+        $opciones = $grupos->flatMap->opciones->filter(fn ($o) => $o->producto_id && (float) $o->cantidad > 0);
+        if ($opciones->isEmpty()) {
+            return collect();
+        }
+        $apartado = OrdenService::insumosApartados();
+        $stock = Inventario::whereIn('producto_id', $opciones->pluck('producto_id'))->pluck('stock_actual', 'producto_id');
+
+        return $opciones->filter(function ($o) use ($apartado, $stock) {
+            $porcion = VentaService::consumoDeModificadores([$o->id], 1)[0]['cantidad'] ?? 0;
+            return $porcion > 0 && (float) ($stock[$o->producto_id] ?? 0) - ($apartado[$o->producto_id] ?? 0) < $porcion - 0.0001;
+        })->pluck('id')->values();
     }
 
     // ── Orden de una terminal ─────────────────────────────────
@@ -255,6 +304,9 @@ class MesaApiController extends Controller
             'items.*.modificadores'   => 'nullable|array|max:20',
             'items.*.modificadores.*' => 'integer',
             'items.*.notas'           => 'nullable|string|max:200',
+            'items.*.ajustes'               => 'nullable|array|max:30',
+            'items.*.ajustes.*.producto_id' => 'required|integer',
+            'items.*.ajustes.*.cantidad'    => 'required|numeric|min:0',
         ], ['items.required' => 'Agrega al menos un producto']);
         if ($error) return $error;
 
@@ -263,31 +315,71 @@ class MesaApiController extends Controller
         return response()->json(['success' => 1, 'orden' => self::formatoOrden($orden->fresh())]);
     }
 
-    // PUT /mesas/items/{item} {cantidad?, notas?}
+    // PUT /mesas/items/{item} {cantidad?, notas?, ajustes?}
     public function actualizarItem(Request $request, OrdenItem $item)
     {
         [$datos, $error] = $this->validar($request, [
             'cantidad' => 'nullable|numeric|gt:0|max:9999',
             'notas'    => 'nullable|string|max:200',
+            'ajustes'  => 'nullable|array|max:30',
+            'ajustes.*.producto_id' => 'required|integer',
+            'ajustes.*.cantidad'    => 'required|numeric|min:0',
+            'modificadores'   => 'nullable|array|max:30',
+            'modificadores.*' => 'integer',
         ]);
         if ($error) return $error;
 
-        OrdenService::actualizarItem($item, $request->only(array_keys($datos)));
+        OrdenService::actualizarItem($item, $request->only(array_intersect(['cantidad', 'notas', 'ajustes', 'modificadores'], array_keys($request->all()))));
 
         return response()->json(['success' => 1, 'orden' => self::formatoOrden($item->orden->fresh())]);
     }
 
-    // POST /mesas/items/{item}/quitar {motivo?}
+    // POST /mesas/items/{item}/quitar {motivo?, cantidad?, autorizacion?}: todo o parte (1 de 3)
     public function quitarItem(Request $request, OrdenItem $item)
     {
         [$datos, $error] = $this->validar($request, [
             'motivo'           => 'nullable|string|max:300',
+            'cantidad'         => 'nullable|numeric|gt:0|max:9999',
         ]);
         if ($error) return $error;
 
-        OrdenService::quitarItem($item, $request->user(), $datos['motivo'] ?? null);
+        $cancelado = OrdenService::quitarItem($item, $request->user(), $datos['motivo'] ?? null,
+            isset($datos['cantidad']) ? (float) $datos['cantidad'] : null);
 
-        return response()->json(['success' => 1, 'orden' => self::formatoOrden($item->orden->fresh())]);
+        return response()->json([
+            'success'   => 1,
+            'message'   => $cancelado ? 'Producto cancelado' : 'Producto quitado',
+            'impresion' => $cancelado ? self::avisoCancelacion($cancelado, $datos['motivo'], $request->user()) : null,
+            'orden'     => self::formatoOrden($item->orden->fresh()),
+        ]);
+    }
+
+    // POST /mesas/comandas/{comanda}/anular {motivo, autorizacion?}: cancela toda la comanda
+    public function anularComanda(Request $request, Comanda $comanda)
+    {
+        [$datos, $error] = $this->validar($request, ['motivo' => 'required|string|max:300'],
+            ['motivo.required' => 'Indica por qué se anula la comanda']);
+        if ($error) return $error;
+
+        $cancelado = OrdenService::anularComanda($comanda, $request->user(), $datos['motivo']);
+
+        return response()->json([
+            'success'   => 1,
+            'message'   => "Comanda #{$comanda->numero} anulada",
+            'impresion' => self::avisoCancelacion($cancelado, $datos['motivo'], $request->user()),
+            'orden'     => self::formatoOrden($comanda->orden->fresh()),
+        ]);
+    }
+
+    // El ticket CANCELADO sale en el área; si falla, la cancelación igual queda
+    private static function avisoCancelacion(array $cancelado, string $motivo, $usuario): array
+    {
+        $trabajos = collect(ImpresionService::imprimirCancelacion($cancelado['items'], $motivo, $usuario, $cancelado['autorizador']));
+
+        return [
+            'impresas' => $trabajos->where('estado', 'impreso')->count(),
+            'errores'  => $trabajos->where('estado', 'error')->pluck('error')->values(),
+        ];
     }
 
     // POST /mesas/ordenes/{orden}/enviar {notas?}: comandas a cocina y barra
@@ -324,9 +416,10 @@ class MesaApiController extends Controller
         [$datos, $error] = $this->validar($request, ['item_ids' => 'required|array|min:1', 'item_ids.*' => 'integer']);
         if ($error) return $error;
 
-        OrdenService::entregarItems($orden, $datos['item_ids']);
+        $marcados = OrdenService::entregarItems($orden, $datos['item_ids']);
 
-        return response()->json(['success' => 1, 'orden' => self::formatoOrden($orden->fresh())]);
+        return response()->json(['success' => 1, 'message' => "{$marcados} producto(s) marcado(s) como entregado(s)",
+            'orden' => self::formatoOrden($orden->fresh())]);
     }
 
     // ── Cuentas separadas ─────────────────────────────────────
@@ -357,9 +450,10 @@ class MesaApiController extends Controller
     public function eliminarTicket(OrdenTicket $ticket)
     {
         $orden = $ticket->orden;
+        $nombre = $ticket->nombre;
         OrdenService::eliminarTicket($ticket);
 
-        return response()->json(['success' => 1, 'orden' => self::formatoOrden($orden->fresh())]);
+        return response()->json(['success' => 1, 'message' => "{$nombre} se borró", 'orden' => self::formatoOrden($orden->fresh())]);
     }
 
     // POST /mesas/ordenes/{orden}/mover {item_ids, ticket_id}

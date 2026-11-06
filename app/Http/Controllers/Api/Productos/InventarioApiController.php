@@ -10,6 +10,7 @@ use App\Exceptions\NegocioException;
 use App\Services\AuditoriaService;
 use App\Services\AutorizacionService;
 use App\Services\InventarioService;
+use App\Services\NotificacionService;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Http\Request;
 use Carbon\Carbon;
@@ -106,6 +107,10 @@ class InventarioApiController extends Controller
         $antes = (float) $inventario->stock_minimo;
         $inventario->stock_minimo = $request->stock_minimo;
         $inventario->save();
+
+        // Subir el mínimo puede dejar al producto en alerta sin que se mueva el stock
+        $stock = (float) $inventario->stock_actual;
+        NotificacionService::revisarStock($producto, $stock, $stock, (float) $inventario->stock_minimo, $antes);
 
         AuditoriaService::registrar('inventario', 'stock_minimo', $producto,
             ['stock_minimo' => $antes], ['stock_minimo' => (float) $inventario->stock_minimo], $producto->nombre);
@@ -230,7 +235,7 @@ class InventarioApiController extends Controller
         $bajas = InventarioService::bajasDeInsumos($request->input('tipo'), $request->input('items'));
         if ($bajas) {
             $autorizador = AutorizacionService::autorizar($request->user(), 'inventario.autorizar_baja',
-                'Bajar a mano ' . implode(', ', $bajas) . ' solo lo puede hacer el administrador: estos insumos se descuentan con las ventas y la producción');
+                'Bajar a mano ' . implode(', ', $bajas) . ' necesita autorización del administrador: estos insumos se descuentan con las ventas y la producción');
         }
 
         try {

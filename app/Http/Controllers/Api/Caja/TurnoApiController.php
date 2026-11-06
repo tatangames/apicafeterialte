@@ -69,6 +69,7 @@ class TurnoApiController extends Controller
             'estado'                 => $t->estado,
             'abierto_at'             => $t->abierto_at->format('Y-m-d H:i'),
             'cerrado_at'             => $t->cerrado_at?->format('Y-m-d H:i'),
+            'usuario_apertura_id'    => $t->usuario_apertura_id,
             'usuario_apertura'       => $t->usuarioApertura?->nombre,
             'usuario_cierre'         => $t->usuarioCierre?->nombre,
             'fondo_inicial'          => (float) $t->fondo_inicial,
@@ -171,9 +172,14 @@ class TurnoApiController extends Controller
         $caja  = Caja::find($request->caja_id);
         $turno = TurnoCaja::where('caja_id', $caja->id)->where('estado', 'abierto')->first();
 
+        // Turno de otra persona que se fue sin cerrarlo: solo se puede cerrar (ver CajaService::exigirTurnoPropio)
+        $usuario = $request->user();
+        $ajeno = $turno && (int) $turno->usuario_apertura_id !== (int) $usuario->id && !$usuario->hasRole('admin');
+
         return response()->json([
-            'success' => 1,
-            'caja'    => ['id' => $caja->id, 'nombre' => $caja->nombre, 'activo' => $caja->activo],
+            'success'     => 1,
+            'caja'        => ['id' => $caja->id, 'nombre' => $caja->nombre, 'activo' => $caja->activo],
+            'turno_ajeno' => $ajeno,
         ] + ($turno ? $this->detalle($turno, $this->ocultarEsperado($request)) : ['turno' => null] + $this->alAbrir($caja)));
     }
 
@@ -258,6 +264,7 @@ class TurnoApiController extends Controller
         if ($error = $this->turnoAbiertoOFalla($turno)) {
             return $error;
         }
+        CajaService::exigirTurnoPropio($turno);
 
         $mov = CajaService::registrarMovimiento(
             turno:        $turno,

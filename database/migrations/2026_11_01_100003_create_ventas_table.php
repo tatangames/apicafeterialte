@@ -64,6 +64,8 @@ return new class extends Migration
             $table->foreignId('producto_id')->constrained('productos');
             // Copia del producto al vender: el historial no cambia si luego cambia el producto
             $table->string('nombre_producto', 300);
+            // Extras, cambios de receta y nota de la venta rápida, uno por renglón en la comanda
+            $table->json('extras')->nullable();
             $table->string('unidad', 10)->nullable();
             $table->decimal('cantidad', 12, 4);
             $table->decimal('precio_unitario', 12, 2);

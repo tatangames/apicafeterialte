@@ -92,3 +92,42 @@ Las altas, cambios y bajas de impresoras quedan en auditoría.
 - **Logo:** el logo del negocio todavía no se imprime en la térmica (sí aparece en el ticket del navegador). Requiere convertir la imagen al formato de bits de ESC/POS.
 - **Sin servidor:** si el servidor no responde, la térmica no recibe nada; en ese caso el ticket se imprime desde el navegador. Esto entra en la Fase 5.
 - **Datos de prueba:** quedó en `posdb` la impresora «Mostrador» apuntando a 127.0.0.1:9100. Hay que cambiarle la IP por la de la impresora real.
+
+## Recibo del cliente con el formato del negocio (2026-11-05)
+
+El ticket de venta (térmico en `ImpresionService::ticket` y del navegador en `components/pos/TicketVenta.tsx`) copia el recibo que ya usaba el negocio:
+
+- **Emisor:** razón social en grande, dirección, nombre comercial, NIT, NRC (en negrita), actividad económica, tipo de establecimiento y teléfono. Son campos nuevos de `configuracion_negocio` (`nit`, `nrc`, `actividad_economica`, `tipo_establecimiento`), editables en Datos del negocio (web) y en Ajustes (tablet).
+- **Documento:** «Recibo», fecha y hora de la venta y «Emisor: {nombre comercial} {caja}».
+- **Receptor:** nombre del cliente o «Consumidor Final», su dirección o «Ciudad», y «No. de Venta».
+- **Detalle:** columnas Cant, Descripción, Precio y Total; «Total: $», el total en letras (`App\Support\NumeroALetras`, igual en `utils/numeroALetras.ts`) y la condición de la operación (las formas de pago).
+- Se conservan: copia, anulada, anticipo, referencias, efectivo recibido y cambio, crédito con firma, y el mensaje del pie.
+
+## Comanda con el formato del negocio (2026-11-05)
+
+La comanda que sale a cocina o barra (`ImpresionService::comanda`) es igual a la "Solicitud de producción" que usa el negocio. Todo va en negrita y doble alto; el número y el nombre además a doble ancho.
+
+```
+            #031719            (número de comanda)
+       PANADERIA EDUARDO
+    Solicitud de producción
+Mesa: MESA 1
+05/11/2026
+                          12:15
+===============================
+           Ticket 1            (la cuenta de la mesa)
+CANT    DESCRIPCIÓN
+1       Ice latte
+        * saborizante caramelo
+        * leche deslactosada
+           ORIGINAL            (COPIA al reimprimir)
+```
+
+- Lleva el área en grande debajo de «Solicitud de producción» («** COCINA **», «** BARRA **»; desde 2026-11-06), porque Cocina y Barra pueden imprimir en la misma impresora. Cada área sale en su propio ticket; lo que no tiene área sale en una comanda general sin ese encabezado. No lleva mesero ni personas.
+- Los extras, lo que no lleva y la nota del producto salen uno por renglón con `*`. La nota de la comanda, si hay, sale debajo de la mesa.
+- En mostrador, en lugar de «Mesa:» va el nombre de la caja, y el nombre del cliente («Juan») en el lugar de «Ticket 1».
+- El aviso de cancelación usa el mismo formato con «** CANCELADO **» arriba, mesero, autorizó y motivo, y «CANCELADO» al final.
+- Venta rápida: «#T-000001» (número de la venta), «Mostrador» y el cliente en el lugar de la cuenta, si lo hay. Pedido especial: «#P-000001», «Pedido especial» y el nombre del pedido. Pedidos de mostrador (se cobran después): «Mostrador» y el nombre del cliente.
+- Botón «Prueba producción» en Impresoras (web y tablet), `POST /admin/impresora/{id}/test-produccion`: imprime una comanda de ejemplo con el mismo `comanda()`.
+- Web sin térmica o con error: `utils/imprimirComandas.ts` imprime desde el navegador con el mismo formato; `formatoComanda` manda `terminal_tipo` y `cuenta` para eso. La tablet no tiene impresión propia: todo sale por la API.
+- `comanda()` recibe `$datos` (numero, lugar, cuenta, extra, marca, cancelado).

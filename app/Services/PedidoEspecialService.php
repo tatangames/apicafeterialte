@@ -143,6 +143,7 @@ class PedidoEspecialService
         if (!$turno) {
             throw new NegocioException('Abre el turno de caja para recibir el anticipo');
         }
+        CajaService::exigirTurnoPropio($turno);
 
         CajaService::registrarMovimiento(
             turno:         $turno,

@@ -39,6 +39,12 @@ Todas las operaciones están en `App\Services\CajaService`.
   - Después del cierre se rechaza cualquier movimiento nuevo.
 - **Reabrir:** requiere el permiso nuevo `caja.reabrir` (solo administrador) y un motivo, que queda en auditoría. No se puede si la caja ya tiene otro turno abierto.
 - **Cierre ciego:** quien no tiene `caja.historial` no ve el efectivo esperado mientras el turno está abierto. Al cerrar se le muestra el resultado.
+- **Turno ajeno (2026-11-04):** cada quien vende y mueve dinero solo en su propio turno (`CajaService::exigirTurnoPropio`).
+  - Si un mesero cerró sesión sin cerrar su turno, el siguiente no puede vender, cobrar abonos o anticipos, registrar ingresos, egresos, gastos, pagos a proveedores ni devoluciones en ese turno. Solo puede hacer arqueo y **cerrarlo** (el cierre queda a su nombre con la diferencia que salga) y luego abrir el suyo, sin cerrar su sesión.
+  - El admin puede operar en cualquier turno (ayuda en horas pico).
+  - Las ventas sin conexión que se sincronizan después no se rechazan: ya ocurrieron.
+  - `GET /caja/turno-actual` devuelve `turno_ajeno` y `turno.usuario_apertura_id`; la tablet y la web muestran el aviso rojo y bloquean la venta.
+  - Al **salir** con su turno abierto, la tablet ofrece "Cerrar mi turno" o "Salir sin cerrar"; la web pide confirmar y si no, lleva al cierre.
 
 **Auditoría:** se registran la apertura, cada ingreso y egreso, las anulaciones, los arqueos, el cierre, la reapertura y los cambios a cajas y métodos de pago.
 

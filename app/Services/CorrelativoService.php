@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\DB;
 class CorrelativoService
 {
     /**
-     * Devuelve el siguiente número del correlativo (ej. "T-000015") y lo incrementa.
+     * Devuelve el siguiente número del correlativo (ej. "C-000015", o "000015" sin prefijo como los tickets) y lo incrementa.
      * Usa bloqueo de fila: si se llama dentro de una transacción, el número
      * queda reservado hasta el commit y no se repite entre cajas.
      */

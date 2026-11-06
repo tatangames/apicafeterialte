@@ -17,6 +17,8 @@ use Tests\TestCase;
 
 class GastosTest extends TestCase
 {
+    protected bool $turnoSigueAlUsuario = true;
+
     private Caja $caja;
     private TurnoCaja $turno;
     private int $gas;
@@ -157,6 +159,15 @@ class GastosTest extends TestCase
 
         $this->actuarComo('encargado_inventario');
         $this->getJson('/api/gastos')->assertStatus(403);
+
+        // Ver gastos no basta para administrar categorías: hace falta gastos.categorias
+        $mesero = $this->actuarComo('mesero');
+        $this->postJson('/api/gastos/categorias', ['nombre' => 'Internet'])->assertStatus(403);
+        $mesero->givePermissionTo('gastos.categorias');
+        $id = $this->postJson('/api/gastos/categorias', ['nombre' => 'Internet'])->assertCreated()->json('categoria.id');
+        $this->putJson("/api/gastos/categorias/{$id}", ['nombre' => 'Internet y cable', 'activo' => false])->assertOk();
+        $this->getJson('/api/gastos/categorias')->assertJsonMissing(['nombre' => 'Internet y cable']);
+        $this->getJson('/api/gastos/categorias?todas=1')->assertJsonFragment(['nombre' => 'Internet y cable', 'activo' => false]);
 
         $this->actuarComo('admin');
         $this->postJson('/api/gastos/categorias', ['nombre' => 'Publicidad'])->assertCreated();

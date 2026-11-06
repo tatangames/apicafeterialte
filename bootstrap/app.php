@@ -54,6 +54,9 @@ return Application::configure(basePath: dirname(__DIR__))
             ], 403);
         });
 
+        // Nunca guardar en logs el PIN o la contraseña de quien autoriza
+        $exceptions->dontFlash(['autorizacion', 'pin', 'pin_confirmation', 'password_actual']);
+
         // 403 - Sin permiso (middleware de Spatie)
         $exceptions->render(function (UnauthorizedException $e, Request $request) {
             return response()->json([
@@ -69,6 +72,7 @@ return Application::configure(basePath: dirname(__DIR__))
                 'success' => false,
                 'status'  => 'SIN_PERMISO',
                 'permiso' => $e->permiso,
+                'invalido' => $e->invalido,
                 'message' => $e->getMessage(),
             ], 403);
         });

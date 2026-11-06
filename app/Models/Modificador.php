@@ -12,12 +12,16 @@ class Modificador extends Model
         'grupo_id',
         'nombre',
         'precio',
+        'producto_id',
+        'cantidad',
+        'unidad_medida_id',
         'orden',
         'activo',
     ];
 
     protected $casts = [
         'precio' => 'decimal:2',
+        'cantidad' => 'decimal:4',
         'orden' => 'integer',
         'activo' => 'boolean',
     ];
@@ -25,5 +29,16 @@ class Modificador extends Model
     public function grupo()
     {
         return $this->belongsTo(GrupoModificador::class, 'grupo_id');
+    }
+
+    // Insumo que se descuenta al vender la opción
+    public function insumo()
+    {
+        return $this->belongsTo(Producto::class, 'producto_id');
+    }
+
+    public function unidad()
+    {
+        return $this->belongsTo(UnidadesMedida::class, 'unidad_medida_id');
     }
 }

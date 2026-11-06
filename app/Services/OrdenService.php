@@ -5,11 +5,14 @@ namespace App\Services;
 use App\Exceptions\NegocioException;
 use App\Models\Administrador;
 use App\Models\Comanda;
+use App\Models\ConfiguracionNegocio;
+use App\Models\Inventario;
 use App\Models\GrupoModificador;
 use App\Models\Orden;
 use App\Models\OrdenItem;
 use App\Models\OrdenTicket;
 use App\Models\Producto;
+use App\Models\Receta;
 use App\Models\Terminal;
 use App\Models\Venta;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -27,13 +30,16 @@ class OrdenService
 {
     // ── Orden ─────────────────────────────────────────────────
 
-    /** Orden abierta de la terminal; si no hay, la abre con su primera cuenta. */
-    public static function abrir(Terminal $terminal, Administrador $usuario, array $datos = []): Orden
+    /**
+     * Orden abierta de la terminal; si no hay, la abre con su primera cuenta.
+     * $mostrador: pedidos por cobrar de la venta rápida, que viven en la terminal de la caja
+     */
+    public static function abrir(Terminal $terminal, Administrador $usuario, array $datos = [], bool $mostrador = false): Orden
     {
         if (!$terminal->activo) {
             throw new NegocioException("{$terminal->nombre} está desactivada");
         }
-        if ($terminal->tipo === 'caja') {
+        if ($terminal->tipo === 'caja' && !$mostrador) {
             throw new NegocioException("{$terminal->nombre} es la caja de mostrador: vende desde el punto de venta rápido");
         }
 
@@ -91,6 +97,123 @@ class OrdenService
     // ── Productos de la orden ─────────────────────────────────
 
     /**
+     * Lo que ya está apartado en cuentas abiertas (sin cobrar ni cancelar), por producto.
+     * Se descuenta del inventario al cobrar, pero mientras tanto ya no está disponible.
+     */
+    public static function apartado(array $productoIds, ?int $excluirItemId = null): Collection
+    {
+        if (!$productoIds) {
+            return collect();
+        }
+
+        return OrdenItem::whereIn('producto_id', $productoIds)
+            ->whereNull('venta_id')
+            ->where('estado', '!=', 'cancelado')
+            ->whereHas('orden', fn ($q) => $q->where('estado', 'abierta'))
+            ->when($excluirItemId, fn ($q) => $q->whereKeyNot($excluirItemId))
+            ->groupBy('producto_id')
+            ->selectRaw('producto_id, SUM(cantidad) as total')
+            ->pluck('total', 'producto_id')
+            ->map(fn ($v) => (float) $v);
+    }
+
+    /**
+     * Sin stock negativo permitido (Datos del negocio), no se aparta más de lo que hay:
+     * así el mesero se entera al tomar la orden y no al cobrar.
+     */
+    private static function validarExistencia(Producto $producto, float $cantidad, ?int $excluirItemId = null, float $yaEnEsteEnvio = 0): void
+    {
+        if (!$producto->controla_stock || ConfiguracionNegocio::actual()->permitir_stock_negativo) {
+            return;
+        }
+        $stock = (float) (Inventario::where('producto_id', $producto->id)->value('stock_actual') ?? 0);
+        $disponible = $stock - (self::apartado([$producto->id], $excluirItemId)->get($producto->id) ?? 0) - $yaEnEsteEnvio;
+
+        if ($cantidad > $disponible + 0.0001) {
+            $quedan = rtrim(rtrim(number_format(max(0, $disponible), 3, '.', ''), '0'), '.');
+            throw new NegocioException($disponible <= 0.0001
+                ? "No hay existencia de {$producto->nombre}"
+                : "Solo quedan {$quedan} de {$producto->nombre}");
+        }
+    }
+
+    /**
+     * Insumos que gasta una línea, por insumo y en la unidad del inventario: los de su
+     * receta de venta (con lo que el cliente pidió distinto) y los de sus extras
+     * (Leche entera: 200 ml). Es lo que se descuenta al cobrar.
+     * @return array<int, float> [insumo_id => cantidad]
+     */
+    public static function insumosDeLinea(Producto $producto, float $cantidad, array $modificadorIds, array $factores = []): array
+    {
+        $total = [];
+        if (!$producto->controla_stock) {
+            $receta = Receta::where('producto_id', $producto->id)->where('activa', true)->where('uso', 'venta')->first();
+            foreach ($receta ? ProduccionService::consumoDeVenta($receta, $cantidad) : [] as $s) {
+                $total[$s['producto_id']] = ($total[$s['producto_id']] ?? 0) + $s['cantidad'] * ($factores[$s['producto_id']] ?? 1);
+            }
+        }
+        foreach (VentaService::consumoDeModificadores($modificadorIds, $cantidad) as $s) {
+            $total[$s['producto_id']] = ($total[$s['producto_id']] ?? 0) + $s['cantidad'];
+        }
+        return array_filter($total, fn ($c) => $c > 0);
+    }
+
+    /**
+     * Insumos ya comprometidos en cuentas abiertas sin cobrar (aún no salen del inventario).
+     * @return array<int, float>
+     */
+    public static function insumosApartados(?int $excluirItemId = null): array
+    {
+        $total = [];
+        OrdenItem::with('producto')->whereNull('venta_id')->where('estado', '!=', 'cancelado')
+            ->whereHas('orden', fn ($q) => $q->where('estado', 'abierta'))
+            ->when($excluirItemId, fn ($q) => $q->whereKeyNot($excluirItemId))
+            ->get()
+            ->each(function (OrdenItem $i) use (&$total) {
+                if (!$i->producto) {
+                    return;
+                }
+                $ids = collect($i->modificadores ?? [])->pluck('id')->all();
+                foreach (self::insumosDeLinea($i->producto, (float) $i->cantidad, $ids, $i->factoresAjuste()) as $id => $c) {
+                    $total[$id] = ($total[$id] ?? 0) + $c;
+                }
+            });
+        return $total;
+    }
+
+    /**
+     * Sin stock negativo, revisa que alcancen los insumos de la receta y de los extras
+     * («No hay existencia de Leche entera») contando lo apartado en cuentas abiertas.
+     * $enEsteEnvio acumula lo que piden las líneas anteriores de la misma petición.
+     */
+    private static function validarInsumos(Producto $producto, float $cantidad, array $modificadorIds, array $factores = [],
+        ?int $excluirItemId = null, array &$enEsteEnvio = []): void
+    {
+        if (ConfiguracionNegocio::actual()->permitir_stock_negativo) {
+            return;
+        }
+        $necesita = self::insumosDeLinea($producto, $cantidad, $modificadorIds, $factores);
+        if (!$necesita) {
+            return;
+        }
+        $apartado = self::insumosApartados($excluirItemId);
+        $insumos = Producto::with('inventario:producto_id,stock_actual', 'unidadMedida')->whereIn('id', array_keys($necesita))->get();
+        foreach ($insumos as $insumo) {
+            $disponible = (float) ($insumo->inventario?->stock_actual ?? 0) - ($apartado[$insumo->id] ?? 0) - ($enEsteEnvio[$insumo->id] ?? 0);
+            if ($necesita[$insumo->id] > $disponible + 0.0001) {
+                $u = $insumo->unidadMedida?->abreviatura ? ' ' . $insumo->unidadMedida->abreviatura : '';
+                $quedan = rtrim(rtrim(number_format(max(0, $disponible), 3, '.', ''), '0'), '.');
+                throw new NegocioException($disponible <= 0.0001
+                    ? "No hay existencia de {$insumo->nombre} para {$producto->nombre}"
+                    : "Solo quedan {$quedan}{$u} de {$insumo->nombre}: no alcanza para {$producto->nombre}");
+            }
+        }
+        foreach ($necesita as $id => $c) {
+            $enEsteEnvio[$id] = ($enEsteEnvio[$id] ?? 0) + $c;
+        }
+    }
+
+    /**
      * Valida los modificadores elegidos contra los grupos del producto y
      * devuelve [modificadores elegidos, precio extra].
      */
@@ -127,6 +250,43 @@ class OrdenService
     }
 
     /**
+     * Valida lo que el cliente pidió distinto de la receta ("solo 1 huevo", "sin
+     * queso", "extra frijol"). El precio no cambia; solo se descuenta lo que salió.
+     * @param array $ajustes [['producto_id', 'cantidad' (por unidad vendida, en la unidad del inventario)], ...]
+     * @return array|null [['producto_id', 'nombre', 'base', 'cantidad', 'unidad'], ...] solo los que cambian
+     */
+    public static function resolverAjustes(Producto $producto, array $ajustes): ?array
+    {
+        if (!$ajustes) {
+            return null;
+        }
+        $receta = $producto->controla_stock ? null
+            : Receta::where('producto_id', $producto->id)->where('activa', true)->where('uso', 'venta')->first();
+        if (!$receta) {
+            throw new NegocioException("{$producto->nombre} no tiene receta de venta: no se le pueden quitar ingredientes");
+        }
+        $ingredientes = collect(ProduccionService::ingredientesPorUnidad($receta))->keyBy('producto_id');
+
+        $resultado = [];
+        foreach ($ajustes as $a) {
+            $ing = $ingredientes->get((int) ($a['producto_id'] ?? 0));
+            if (!$ing) {
+                throw new NegocioException("Uno de los ingredientes no está en la receta de {$producto->nombre}");
+            }
+            $cantidad = round((float) ($a['cantidad'] ?? 0), 4);
+            if ($cantidad < 0 || $cantidad > $ing['base'] * 10) {
+                throw new NegocioException("La cantidad de {$ing['nombre']} no es válida");
+            }
+            if (abs($cantidad - $ing['base']) < 0.0001) {
+                continue; // lo normal: no es un cambio
+            }
+            $resultado[$ing['producto_id']] = [...$ing, 'cantidad' => $cantidad];
+        }
+
+        return $resultado ? array_values($resultado) : null;
+    }
+
+    /**
      * Agrega productos a una cuenta. Quedan "pendientes" hasta enviarlos.
      * @param array $items [['producto_id', 'cantidad', 'modificadores' => [ids], 'notas'], ...]
      */
@@ -137,8 +297,10 @@ class OrdenService
         return DB::transaction(function () use ($orden, $ticketId, $items, $usuario, $productos) {
             $orden = self::bloquear($orden);
             $ticket = self::ticketDe($orden, $ticketId);
+            $enEsteEnvio = [];
+            $insumosEnEnvio = [];
 
-            return collect($items)->map(function ($i) use ($orden, $ticket, $usuario, $productos) {
+            return collect($items)->map(function ($i) use ($orden, $ticket, $usuario, $productos, &$enEsteEnvio, &$insumosEnEnvio) {
                 $producto = $productos->get($i['producto_id']);
                 if (!$producto || !$producto->activo || !$producto->se_vende) {
                     throw new NegocioException('Uno de los productos no está disponible para la venta');
@@ -151,7 +313,29 @@ class OrdenService
                     throw new NegocioException("{$producto->nombre} solo se vende por unidades enteras");
                 }
 
+                self::validarExistencia($producto, $cantidad, null, $enEsteEnvio[$producto->id] ?? 0);
+                $enEsteEnvio[$producto->id] = ($enEsteEnvio[$producto->id] ?? 0) + $cantidad;
+
                 [$modificadores, $extra] = self::resolverModificadores($producto, $i['modificadores'] ?? []);
+
+                $ajustes = self::resolverAjustes($producto, $i['ajustes'] ?? []);
+                self::validarInsumos($producto, $cantidad, collect($modificadores)->pluck('id')->all(),
+                    (new OrdenItem(['ajustes' => $ajustes]))->factoresAjuste(), null, $insumosEnEnvio);
+                $notas = trim((string) ($i['notas'] ?? '')) ?: null;
+                $precio = round((float) $producto->precio_venta + $extra, 2);
+
+                // El mismo producto, con los mismos extras, ingredientes y nota, que aún no se
+                // envía en esta cuenta: se suma a esa línea («2 × Americano») en vez de repetirla
+                $igual = OrdenItem::where('orden_id', $orden->id)->where('ticket_id', $ticket->id)
+                    ->where('producto_id', $producto->id)->where('estado', 'pendiente')->lockForUpdate()->get()
+                    ->first(fn (OrdenItem $o) => (float) $o->precio_unitario === $precio
+                        && ($o->notas ?: null) === $notas
+                        && self::mismaLista($o->modificadores, $modificadores)
+                        && self::mismaLista($o->ajustes, $ajustes));
+                if ($igual) {
+                    $igual->update(['cantidad' => round((float) $igual->cantidad + $cantidad, 4)]);
+                    return $igual;
+                }
 
                 // El área de preparación sale de la categoría del producto
                 $area = $producto->categorias->map(fn ($c) => $c->area)->first(fn ($a) => $a && $a->activo);
@@ -164,14 +348,22 @@ class OrdenService
                     'cantidad'        => $cantidad,
                     'precio_base'     => (float) $producto->precio_venta,
                     'modificadores'   => $modificadores ?: null,
-                    'precio_unitario' => round((float) $producto->precio_venta + $extra, 2),
-                    'notas'           => $i['notas'] ?? null,
+                    'ajustes'         => $ajustes,
+                    'precio_unitario' => $precio,
+                    'notas'           => $notas,
                     'estado'          => 'pendiente',
                     'area_id'         => $area?->id,
                     'usuario_id'      => $usuario->id,
                 ]);
             });
         });
+    }
+
+    // Dos listas de extras o ajustes iguales sin importar el orden ni las claves
+    private static function mismaLista(?array $a, ?array $b): bool
+    {
+        $normal = fn (?array $l) => collect($l ?? [])->map(fn ($x) => json_encode(collect($x)->sortKeys()->all()))->sort()->values()->all();
+        return $normal($a) === $normal($b);
     }
 
     // Cambia cantidad o notas de un producto que todavía no se envía
@@ -191,10 +383,26 @@ class OrdenService
                 if (!$item->producto->permite_fraccion && floor($cantidad) != $cantidad) {
                     throw new NegocioException("{$item->nombre_producto} solo se vende por unidades enteras");
                 }
+                if ($cantidad > (float) $item->cantidad) {
+                    self::validarExistencia($item->producto, $cantidad, $item->id);
+                }
                 $item->cantidad = $cantidad;
             }
             if (array_key_exists('notas', $datos)) {
                 $item->notas = $datos['notas'];
+            }
+            if (array_key_exists('ajustes', $datos)) {
+                $item->ajustes = self::resolverAjustes($item->producto, $datos['ajustes'] ?? []);
+            }
+            // Cambiar los extras (era deslactosada, no entera): el precio se recalcula
+            if (array_key_exists('modificadores', $datos)) {
+                [$modificadores, $extra] = self::resolverModificadores($item->producto, $datos['modificadores'] ?? []);
+                $item->modificadores = $modificadores ?: null;
+                $item->precio_unitario = round((float) $item->precio_base + $extra, 2);
+            }
+            if (isset($datos['cantidad']) || array_key_exists('ajustes', $datos) || array_key_exists('modificadores', $datos)) {
+                self::validarInsumos($item->producto, (float) $item->cantidad, collect($item->modificadores ?? [])->pluck('id')->all(),
+                    $item->factoresAjuste(), $item->id);
             }
             $item->save();
 
@@ -203,47 +411,122 @@ class OrdenService
     }
 
     /**
-     * Quita un producto. Si no se ha enviado, se borra. Si ya se envió a
-     * preparar, se cancela con motivo y autorización (queda en auditoría).
+     * Quita un producto, todo o solo parte ($cantidad: 1 de 3 cafés). Si no se ha
+     * enviado, se borra o se baja la cantidad. Si ya se envió a preparar, lo
+     * cancelado queda como línea "cancelada" con motivo y autorización (PIN del
+     * administrador) y se avisa al área con un ticket CANCELADO.
+     * @return array|null ['items' => OrdenItem[] cancelados, 'autorizador' => Administrador] si hay que avisar a cocina
      */
-    public static function quitarItem(OrdenItem $item, Administrador $usuario, ?string $motivo): void
+    public static function quitarItem(OrdenItem $item, Administrador $usuario, ?string $motivo, ?float $cantidad = null): ?array
     {
         if ($item->venta_id) {
             throw new NegocioException('El producto ya se cobró: anula la venta o registra una devolución');
         }
-
-        if ($item->estado === 'pendiente') {
-            DB::transaction(function () use ($item) {
-                self::bloquear($item->orden);
-                OrdenItem::whereKey($item->id)->where('estado', 'pendiente')->delete();
-            });
-            return;
-        }
-
         if ($item->estado === 'cancelado') {
             throw new NegocioException('El producto ya está cancelado');
         }
+        $total = (float) $item->cantidad;
+        $cantidad = $cantidad === null ? $total : round($cantidad, 4);
+        if ($cantidad <= 0 || $cantidad > $total + 0.00001) {
+            throw new NegocioException('La cantidad a cancelar debe ser mayor a 0 y no más de ' . rtrim(rtrim(number_format($total, 3, '.', ''), '0'), '.'));
+        }
+        if (!$item->producto->permite_fraccion && floor($cantidad) != $cantidad) {
+            throw new NegocioException("{$item->nombre_producto} se cancela por unidades enteras");
+        }
+        $parcial = $cantidad < $total - 0.00001;
+
+        if ($item->estado === 'pendiente') {
+            DB::transaction(function () use ($item, $parcial, $total, $cantidad) {
+                self::bloquear($item->orden);
+                $parcial
+                    ? OrdenItem::whereKey($item->id)->where('estado', 'pendiente')->update(['cantidad' => round($total - $cantidad, 4)])
+                    : OrdenItem::whereKey($item->id)->where('estado', 'pendiente')->delete();
+            });
+            return null;
+        }
+
         if (!$motivo) {
             throw new NegocioException('Indica por qué se cancela un producto que ya se envió a preparar');
         }
-        $autorizador = AutorizacionService::autorizar($usuario, 'pos.anular', 'Cancelar un producto ya enviado solo lo puede hacer el administrador');
+        $autorizador = AutorizacionService::autorizar($usuario, 'pos.anular', 'Cancelar un producto ya enviado necesita autorización del administrador');
 
-        DB::transaction(function () use ($item, $usuario, $motivo, $autorizador) {
+        $cancelado = DB::transaction(function () use ($item, $usuario, $motivo, $autorizador, $parcial, $total, $cantidad) {
             self::bloquear($item->orden);
             $item = OrdenItem::whereKey($item->id)->lockForUpdate()->first();
-            $item->update(['estado' => 'cancelado', 'cancelado_por' => $usuario->id, 'motivo_cancelacion' => $motivo]);
-
-            // Si la comanda se quedó sin nada que preparar, también se cancela
-            if ($item->comanda_id && !OrdenItem::where('comanda_id', $item->comanda_id)->where('estado', '!=', 'cancelado')->exists()) {
-                Comanda::whereKey($item->comanda_id)->update(['estado' => 'cancelada']);
+            if ($item->venta_id || $item->estado === 'cancelado') {
+                throw new NegocioException('El producto ya se cobró o se canceló');
             }
 
-            AuditoriaService::registrar('mesas', 'cancelar_item', $item, ['estado' => 'enviado'], [
-                'producto'       => $item->descripcion(),
-                'cantidad'       => (float) $item->cantidad,
-                'autorizado_por' => $autorizador->nombre,
-            ], $motivo);
+            $datos = ['estado' => 'cancelado', 'cancelado_por' => $usuario->id, 'motivo_cancelacion' => $motivo];
+            if ($parcial) {
+                // La parte que sigue en la mesa se queda; la cancelada va en su propia línea
+                $item->update(['cantidad' => round($total - $cantidad, 4)]);
+                $cancelado = $item->replicate();
+                $cancelado->fill([...$datos, 'cantidad' => $cantidad])->save();
+            } else {
+                $item->update($datos);
+                $cancelado = $item;
+            }
+
+            self::cerrarComandaVacia($cancelado->comanda_id);
+            self::auditarCancelacion($cancelado, $autorizador, $motivo);
+
+            return $cancelado;
         });
+
+        return ['items' => [$cancelado], 'autorizador' => $autorizador];
+    }
+
+    /**
+     * Anula una comanda completa (el cliente se fue, se mandó a la mesa equivocada):
+     * cancela lo que no se ha cobrado y avisa al área.
+     * @return array ['items' => OrdenItem[] cancelados, 'autorizador' => Administrador]
+     */
+    public static function anularComanda(Comanda $comanda, Administrador $usuario, string $motivo): array
+    {
+        if ($comanda->estado === 'cancelada') {
+            throw new NegocioException('La comanda ya está anulada');
+        }
+        $autorizador = AutorizacionService::autorizar($usuario, 'pos.anular', 'Anular una comanda necesita autorización del administrador');
+
+        $items = DB::transaction(function () use ($comanda, $usuario, $motivo, $autorizador) {
+            self::bloquear($comanda->orden);
+            $items = OrdenItem::where('comanda_id', $comanda->id)->where('estado', '!=', 'cancelado')
+                ->whereNull('venta_id')->lockForUpdate()->get();
+            if ($items->isEmpty()) {
+                throw new NegocioException('No queda nada por anular en esta comanda: lo que tenía ya se cobró o se canceló');
+            }
+
+            OrdenItem::whereIn('id', $items->pluck('id'))
+                ->update(['estado' => 'cancelado', 'cancelado_por' => $usuario->id, 'motivo_cancelacion' => $motivo]);
+            self::cerrarComandaVacia($comanda->id);
+
+            $items = OrdenItem::whereIn('id', $items->pluck('id'))->get();
+            foreach ($items as $item) {
+                self::auditarCancelacion($item, $autorizador, $motivo);
+            }
+
+            return $items;
+        });
+
+        return ['items' => $items->all(), 'autorizador' => $autorizador];
+    }
+
+    // Si la comanda se quedó sin nada que preparar, también se cancela
+    private static function cerrarComandaVacia(?int $comandaId): void
+    {
+        if ($comandaId && !OrdenItem::where('comanda_id', $comandaId)->where('estado', '!=', 'cancelado')->exists()) {
+            Comanda::whereKey($comandaId)->update(['estado' => 'cancelada']);
+        }
+    }
+
+    private static function auditarCancelacion(OrdenItem $item, Administrador $autorizador, string $motivo): void
+    {
+        AuditoriaService::registrar('mesas', 'cancelar_item', $item, ['estado' => 'enviado'], [
+            'producto'       => $item->descripcion(),
+            'cantidad'       => (float) $item->cantidad,
+            'autorizado_por' => $autorizador->nombre,
+        ], $motivo);
     }
 
     // ── Envío a cocina y barra ────────────────────────────────
@@ -304,12 +587,19 @@ class OrdenService
     }
 
     // Marca entregados productos sueltos desde la mesa (ya están listos o no pasan por cocina)
-    public static function entregarItems(Orden $orden, array $itemIds): void
+    // Devuelve cuántos se marcaron; lo que no se ha enviado no se puede entregar
+    public static function entregarItems(Orden $orden, array $itemIds): int
     {
-        DB::transaction(function () use ($orden, $itemIds) {
+        return DB::transaction(function () use ($orden, $itemIds) {
             $orden = self::bloquear($orden);
-            OrdenItem::where('orden_id', $orden->id)->whereIn('id', $itemIds)
+            $marcados = OrdenItem::where('orden_id', $orden->id)->whereIn('id', $itemIds)
                 ->whereIn('estado', ['enviado', 'en_preparacion', 'listo'])->update(['estado' => 'entregado']);
+            if ($marcados === 0) {
+                $sinEnviar = OrdenItem::where('orden_id', $orden->id)->whereIn('id', $itemIds)->where('estado', 'pendiente')->exists();
+                throw new NegocioException($sinEnviar
+                    ? 'Esos productos aún no se envían: toca «Enviar» primero y luego márcalos entregados'
+                    : 'Esos productos ya estaban entregados');
+            }
 
             // Comandas cuyos productos ya se entregaron todos
             $comandas = OrdenItem::where('orden_id', $orden->id)->whereIn('id', $itemIds)->whereNotNull('comanda_id')->pluck('comanda_id')->unique();
@@ -319,6 +609,8 @@ class OrdenService
                     Comanda::whereKey($id)->whereNotIn('estado', ['entregada', 'cancelada'])->update(['estado' => 'entregada', 'entregada_at' => now()]);
                 }
             }
+
+            return $marcados;
         });
     }
 
@@ -387,17 +679,31 @@ class OrdenService
         });
     }
 
+    /**
+     * Borra una cuenta abierta por error. Lo que tenga sin enviar se descarta (no salió
+     * comanda ni inventario). Se rechaza si ya está pagada, si tiene algo cobrado o enviado
+     * a cocina (eso se cancela con motivo o se mueve), o si es la única cuenta abierta.
+     */
     public static function eliminarTicket(OrdenTicket $ticket): void
     {
         DB::transaction(function () use ($ticket) {
             self::bloquear($ticket->orden);
-            if (OrdenItem::where('ticket_id', $ticket->id)->where('estado', '!=', 'cancelado')->exists()) {
-                throw new NegocioException('La cuenta tiene productos: muévelos a otra antes de quitarla');
+            $ticket = OrdenTicket::whereKey($ticket->id)->lockForUpdate()->first();
+            if ($ticket->estado !== 'abierto') {
+                throw new NegocioException("{$ticket->nombre} ya está pagada: no se puede borrar");
             }
-            if (OrdenTicket::where('orden_id', $ticket->orden_id)->count() <= 1) {
-                throw new NegocioException('La orden debe tener al menos una cuenta');
+            $items = OrdenItem::where('ticket_id', $ticket->id)->where('estado', '!=', 'cancelado')->get();
+            if ($items->contains(fn ($i) => $i->venta_id)) {
+                throw new NegocioException("{$ticket->nombre} ya tiene productos cobrados: no se puede borrar");
             }
-            OrdenItem::where('ticket_id', $ticket->id)->delete(); // solo quedan cancelados sin cobrar
+            if ($items->contains(fn ($i) => $i->estado !== 'pendiente')) {
+                throw new NegocioException("{$ticket->nombre} tiene productos ya enviados a cocina: cancélalos (con motivo) o muévelos a otra cuenta antes de borrarla");
+            }
+            if (OrdenTicket::where('orden_id', $ticket->orden_id)->where('estado', 'abierto')->count() <= 1) {
+                throw new NegocioException("{$ticket->nombre} es la única cuenta abierta: si la mesa ya no consume, usa «Liberar mesa»");
+            }
+            // Solo quedan productos sin enviar y cancelados sin cobrar
+            OrdenItem::where('ticket_id', $ticket->id)->whereNull('venta_id')->delete();
             $ticket->delete();
         });
     }
@@ -443,6 +749,8 @@ class OrdenService
                     'cantidad'     => (float) $i->cantidad,
                     'precio_orden' => (float) $i->precio_unitario,
                     'nombre_orden' => $i->descripcion(),
+                    'modificadores_orden' => collect($i->modificadores ?? [])->pluck('id')->filter()->values()->all(),
+                    'ajustes_orden'       => $i->factoresAjuste(),
                 ])->all(),
                 'descuento_global' => $datos['descuento_global'] ?? null,
                 'pagos'            => $datos['pagos'],
@@ -482,7 +790,7 @@ class OrdenService
             if (!$motivo) {
                 throw new NegocioException('La mesa tiene productos sin cobrar: indica por qué se cancelan');
             }
-            $autorizador = AutorizacionService::autorizar($usuario, 'pos.anular', 'Cancelar productos sin cobrar solo lo puede hacer el administrador');
+            $autorizador = AutorizacionService::autorizar($usuario, 'pos.anular', 'Cancelar productos sin cobrar necesita autorización del administrador');
         }
 
         return DB::transaction(function () use ($orden, $usuario, $motivo, $porCobrar, $autorizador) {

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\Config;
 
+use App\Services\ManualService;
 use App\Http\Controllers\Controller;
 use App\Models\Administrador;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
@@ -325,7 +326,9 @@ class RolesApiController extends Controller
         $asignados = $rol->permissions->pluck('name')->flip();
 
         $grupos = [];
-        foreach (Permission::where('guard_name', 'api')->orderBy('name')->get() as $permiso) {
+        // Los permisos de cada manual («manual.{id}») tienen su propia pantalla: aquí no salen
+        $sinManuales = Permission::where('guard_name', 'api')->where('name', 'not like', ManualService::PREFIJO . '%');
+        foreach ($sinManuales->orderBy('name')->get() as $permiso) {
             $prefijo = explode('.', $permiso->name)[0];
             $modulo = isset($catalogo[$permiso->name]) ? ($modulos[$prefijo] ?? ucfirst($prefijo)) : 'Otros';
             $grupos[$modulo][] = [
@@ -366,9 +369,12 @@ class RolesApiController extends Controller
         }
 
         $antes = $rol->permissions->pluck('name')->sort()->values()->all();
-        $rol->syncPermissions($request->permisos);
+        // La matriz no muestra los manuales: se conservan los que el rol ya tenía
+        $esManual = fn ($p) => str_starts_with($p, ManualService::PREFIJO);
+        $rol->syncPermissions(collect($request->permisos)->reject($esManual)
+            ->merge(collect($antes)->filter($esManual))->unique()->values()->all());
         app()[\Spatie\Permission\PermissionRegistrar::class]->forgetCachedPermissions();
-        $despues = collect($request->permisos)->sort()->values()->all();
+        $despues = $rol->fresh()->permissions->pluck('name')->sort()->values()->all();
 
         AuditoriaService::registrar('roles', 'permisos', $rol,
             ['quitados' => array_values(array_diff($antes, $despues))],
@@ -392,6 +398,7 @@ class RolesApiController extends Controller
                     'estado' => $u->estado,
                     'rol' => $u->getRoleNames()->first() ?? 'Sin rol',
                     'ultimo_acceso' => $u->ultimo_acceso?->format('Y-m-d H:i'),
+                    'pin_actualizado_at' => $u->pin_actualizado_at?->format('Y-m-d H:i'),
                 ];
             });
 

@@ -4,7 +4,7 @@ Estado: terminada el 2026-11-01. Plan general: [AUDITORIA_Y_PLAN.md](../AUDITORI
 
 ## Qué cubre
 
-- **Categorías de gasto:** vienen 10 creadas: Servicios básicos, Gas, Alquiler, Planilla, Mantenimiento, Limpieza, Transporte, Papelería, Impuestos y trámites, y Otros. Se pueden crear, renombrar y desactivar.
+- **Categorías de gasto:** vienen 10 creadas: Servicios básicos, Gas, Alquiler, Planilla, Mantenimiento, Limpieza, Transporte, Papelería, Impuestos y trámites, y Otros. Se pueden crear, renombrar y desactivar desde la web (pestaña Categorías) y desde la tableta (botón «Categorías» en Gastos). Requiere el permiso `gastos.categorias` (agregado el 2026-11-04; el admin lo activa por rol en Roles y permisos).
 - **Gastos (`G-000001`):**
   - **Datos:** fecha, categoría, descripción, monto, forma de pago, referencia, proveedor (opcional) y número de factura o recibo.
   - **Comprobante:** se puede adjuntar una foto o un PDF de hasta 5 MB. En la tableta se puede tomar con la cámara.
@@ -33,15 +33,17 @@ Estado: terminada el 2026-11-01. Plan general: [AUDITORIA_Y_PLAN.md](../AUDITORI
 
 | Ruta | Permiso |
 |---|---|
-| `GET /gastos/categorias`, `GET /gastos`, `GET /gastos/{id}/comprobante` | `gastos.ver` o `gastos.registrar` |
+| `GET /gastos/categorias` | `gastos.ver`, `gastos.registrar` o `gastos.categorias` |
+| `GET /gastos`, `GET /gastos/{id}/comprobante` | `gastos.ver` o `gastos.registrar` |
 | `POST /gastos`, `POST /gastos/{id}/anular` | `gastos.registrar` (anular pide además autorización) |
-| `GET /gastos/resumen`, `POST/PUT /gastos/categorias` | `gastos.ver` |
+| `GET /gastos/resumen` | `gastos.ver` |
+| `POST/PUT /gastos/categorias` | `gastos.categorias` |
 
 - **Cambio en Compras:** `GET /compras/proveedores` (solo el listado) también lo pueden usar quienes registran gastos, para asociarlos a un proveedor.
 
 ## Frontend
 
-- **Página `pages/Gastos/Gastos.tsx`:** pestañas Gastos (listado con filtros y detalle), Resumen y Categorías. Las dos últimas solo con `gastos.ver`.
+- **Página `pages/Gastos/Gastos.tsx`:** pestañas Gastos (listado con filtros y detalle), Resumen y Categorías. Resumen pide `gastos.ver`; Categorías pide `gastos.categorias`.
 - **Componente `components/gastos/GastoModal.tsx`:** el registro, con categorías en botones grandes para pantallas táctiles.
 - **Servicio `services/gastos.ts`:** el gasto se envía como `multipart/form-data` para poder adjuntar el comprobante.
 - **Menú:** entrada «Gastos». En la pantalla de Caja hay un botón «Gasto».

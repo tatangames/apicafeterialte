@@ -28,11 +28,11 @@ return new class extends Migration
             $table->foreignId('area_preparacion_id')->nullable()->after('nombre')->constrained('areas_preparacion')->nullOnDelete();
         });
 
-        // Terminales del mapa: mesas, la caja de mostrador y "para llevar"
+        // Terminales del mapa: mesas y la caja de mostrador (para llevar se cobra en venta rápida)
         Schema::create('terminales', function (Blueprint $table) {
             $table->id();
             $table->string('nombre', 60);
-            $table->enum('tipo', ['mesa', 'caja', 'llevar'])->default('mesa');
+            $table->enum('tipo', ['mesa', 'caja'])->default('mesa');
             $table->string('zona', 60)->nullable();          // Salón, Terraza, Barra...
             $table->unsignedSmallInteger('capacidad')->default(4);
             $table->unsignedSmallInteger('orden')->default(0);
@@ -56,6 +56,10 @@ return new class extends Migration
             $table->foreignId('grupo_id')->constrained('grupos_modificadores')->cascadeOnDelete();
             $table->string('nombre', 80);
             $table->decimal('precio', 12, 2)->default(0);
+            // Insumo que gasta la opción al venderse (fresa, miel); vacío si no gasta nada (término del huevo)
+            $table->foreignId('producto_id')->nullable()->constrained('productos')->nullOnDelete();
+            $table->decimal('cantidad', 12, 4)->nullable();
+            $table->foreignId('unidad_medida_id')->nullable()->constrained('unidades_medida')->nullOnDelete();
             $table->unsignedSmallInteger('orden')->default(0);
             $table->boolean('activo')->default(true);
             $table->timestamps();
@@ -127,6 +131,8 @@ return new class extends Migration
             $table->decimal('cantidad', 12, 4);
             $table->decimal('precio_base', 12, 2);
             $table->json('modificadores')->nullable();                     // [{grupo, opcion, precio}]
+            // Cambios a la receta sin cambiar el precio: [{producto_id, nombre, base, cantidad, unidad}] por unidad
+            $table->json('ajustes')->nullable();
             $table->decimal('precio_unitario', 12, 2);                     // base + modificadores
             $table->string('notas', 200)->nullable();
             // pendiente: aún no se envía; enviado → en_preparacion → listo → entregado (lo marca cocina o el mesero)
@@ -146,14 +152,14 @@ return new class extends Migration
             $table->foreignId('orden_id')->nullable()->after('pedido_id')->constrained('ordenes')->nullOnDelete();
         });
 
-        // Lo básico para empezar: áreas, la caja de mostrador, para llevar y seis mesas
+        // Lo básico para empezar: áreas, la caja de mostrador y seis mesas
         $ahora = now();
         DB::table('areas_preparacion')->insert([
             ['nombre' => 'Cocina', 'color' => '#db2777', 'activo' => true, 'created_at' => $ahora, 'updated_at' => $ahora],
             ['nombre' => 'Barra', 'color' => '#0891b2', 'activo' => true, 'created_at' => $ahora, 'updated_at' => $ahora],
         ]);
         $caja = DB::table('cajas')->orderBy('id')->value('id');
-        $terminales = [['CAJA 1', 'caja', 'Mostrador', 0, 1], ['LLEVAR', 'llevar', 'Mostrador', 0, 2]];
+        $terminales = [['CAJA 1', 'caja', 'Mostrador', 0, 1]];
         foreach (range(1, 6) as $n) {
             $terminales[] = ["MESA {$n}", 'mesa', 'Salón', 4, 10 + $n];
         }

@@ -7,6 +7,7 @@ use Illuminate\Database\Seeder;
 use Spatie\Permission\Models\Role;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\PermissionRegistrar;
+use App\Services\ManualService;
 
 class RolesAndPermissionsSeeder extends Seeder
 {
@@ -30,34 +31,6 @@ class RolesAndPermissionsSeeder extends Seeder
             'guard_name' => 'api',
         ]);
 
-        // Dueño / Editor del sitio
-        $roleEditor = Role::firstOrCreate([
-            'name' => 'editor',
-            'guard_name' => 'api',
-        ]);
-
-        /*
-        |--------------------------------------------------------------------------
-        | Permisos
-        |--------------------------------------------------------------------------
-        */
-
-        // Admin
-        Permission::firstOrCreate([
-            'name' => 'admin.sidebar.roles.y.permisos',
-            'guard_name' => 'api',
-        ], [
-            'description' => 'Sidebar Admin sección roles y permisos',
-        ])->syncRoles([$roleAdmin]);
-
-        // Editor
-        Permission::firstOrCreate([
-            'name' => 'editor.sidebar.dashboard',
-            'guard_name' => 'api',
-        ], [
-            'description' => 'Sidebar dashboard para editor',
-        ])->syncRoles([$roleEditor]);
-
         /*
         |--------------------------------------------------------------------------
         | Permisos por módulo (config/permisos.php)
@@ -78,6 +51,8 @@ class RolesAndPermissionsSeeder extends Seeder
                 ->givePermissionTo($permisos);
         }
 
+        // Un permiso por manual de uso; los nuevos se dan a los roles que usan su módulo
         app()[PermissionRegistrar::class]->forgetCachedPermissions();
+        ManualService::sincronizarPermisos();
     }
 }

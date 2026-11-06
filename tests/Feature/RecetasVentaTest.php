@@ -107,12 +107,97 @@ class RecetasVentaTest extends TestCase
         // 12 x 0.05 + 90 x 0.002 = 0.78
         $this->assertEquals(0.78, (float) Venta::first()->costo_total);
         $this->assertDatabaseHas('movimientos_inventario', [
-            'producto_id' => $this->limon->id, 'tipo' => 'venta', 'cantidad' => 12, 'motivo' => 'Venta T-000001: Limonada',
+            'producto_id' => $this->limon->id, 'tipo' => 'venta', 'cantidad' => 12, 'motivo' => 'Venta 000001: Limonada',
         ]);
 
         // Una receta de venta no se produce
         $this->postJson('/api/produccion', ['uuid' => (string) Str::uuid(), 'receta_id' => \App\Models\Receta::first()->id, 'cantidad_producida' => 1])
             ->assertStatus(422)->assertJsonPath('message', 'La receta de Limonada se descuenta al vender: no se produce');
+    }
+
+    public function test_venta_rapida_con_extras_e_ingredientes_cambiados(): void
+    {
+        $this->actuarComo('admin');
+        $desayuno = $this->plato('Desayuno', 2.50);
+        $this->receta($desayuno, [[$this->huevo, 'Unidad', 2], [$this->aceite, 'Mililitro', 2]])->assertCreated();
+        $this->postJson('/api/mesas/config/modificadores', ['nombre' => 'Endulzante', 'productos' => [$desayuno->id], 'opciones' => [
+            ['nombre' => 'Azúcar extra', 'precio' => 0.25, 'producto_id' => $this->azucar->id, 'cantidad' => 10, 'unidad_medida_id' => $this->u['Gramo']],
+            ['nombre' => 'Sin azúcar'],
+        ]])->assertCreated();
+        $azucarExtra = \App\Models\Modificador::where('nombre', 'Azúcar extra')->value('id');
+
+        // El catálogo del POS trae los extras y la receta ajustable
+        $this->getJson('/api/pos/catalogo')
+            ->assertJsonFragment(['nombre' => 'Endulzante'])
+            ->assertJsonFragment(['producto_id' => $this->huevo->id, 'nombre' => 'Huevo', 'base' => 2]);
+
+        $venta = $this->postJson('/api/pos/ventas', [
+            'uuid' => (string) Str::uuid(), 'caja_id' => $this->caja->id,
+            'items' => [
+                // 2 con azúcar extra y un huevo de más cada uno
+                ['producto_id' => $desayuno->id, 'cantidad' => 2, 'modificadores' => [$azucarExtra],
+                    'ajustes' => [['producto_id' => $this->huevo->id, 'cantidad' => 3]], 'notas' => 'bien cocidos'],
+                // 1 sin huevo
+                ['producto_id' => $desayuno->id, 'cantidad' => 1, 'ajustes' => [['producto_id' => $this->huevo->id, 'cantidad' => 0]]],
+            ],
+            'pagos' => [['metodo_pago_id' => MetodoPago::where('nombre', 'Efectivo')->value('id'), 'monto' => 10]],
+        ])->assertCreated()->assertJsonPath('venta.total', 8);   // 2 x 2.75 + 2.50
+
+        $detalles = Venta::find($venta->json('venta.id'))->detalles()->orderBy('id')->get();
+        $this->assertSame('Desayuno (Azúcar extra, Huevo: 3 (lleva 2)) · bien cocidos', $detalles[0]->nombre_producto);
+        $this->assertEquals(2.75, (float) $detalles[0]->precio_unitario);
+        $this->assertSame('Desayuno (sin Huevo)', $detalles[1]->nombre_producto);
+        $this->assertSame(['Azúcar extra', 'Huevo: 3 (lleva 2)', 'bien cocidos'], $detalles[0]->extras);
+
+        // En la comanda el producto va solo y cada extra abajo con «*», un renglón por extra
+        $transporte = new class implements \App\Support\Impresion\Transporte {
+            public array $enviados = [];
+            public function enviar(\App\Models\Impresora $impresora, string $bytes): void
+            {
+                $this->enviados[] = mb_convert_encoding($bytes, 'UTF-8', 'CP850');
+            }
+        };
+        $this->app->instance(\App\Support\Impresion\TransporteRed::class, $transporte);
+        \App\Models\Impresora::create(['alias' => 'Caja', 'conexion' => 'red', 'ip_impresora' => '192.168.1.50', 'puerto' => 9100,
+            'tipo_impresion' => 'escpos', 'ancho_caracteres' => 48, 'uso' => 'ambos', 'activo' => true, 'predeterminada' => true]);
+        $this->postJson('/api/impresion/ventas/' . $venta->json('venta.id'), ['comandas' => true])->assertOk();
+        $comanda = end($transporte->enviados);
+        $this->assertStringContainsString("2       Desayuno\n", $comanda);
+        $this->assertStringContainsString("        * Azúcar extra\n        * Huevo: 3 (lleva 2)\n        * bien cocidos\n", $comanda);
+        $this->assertStringContainsString("        * sin Huevo\n", $comanda);
+        $this->assertStringNotContainsString('Desayuno (', $comanda);
+
+        // Huevos: 2 x 3 + 0 = 6; azúcar del extra: 2 x 10 g; aceite normal: 3 x 2 ml
+        $this->assertEquals(54, $this->stock($this->huevo));
+        $this->assertEquals(4980, $this->stock($this->azucar));
+        $this->assertEqualsWithDelta(4 * 3785.4118 - 6, $this->stock($this->aceite), 0.0001);
+
+        // Un extra que no es del producto se rechaza
+        $this->postJson('/api/pos/ventas', [
+            'uuid' => (string) Str::uuid(), 'caja_id' => $this->caja->id,
+            'items' => [['producto_id' => $this->limonada->id, 'cantidad' => 1, 'modificadores' => [$azucarExtra]]],
+            'pagos' => [],
+        ])->assertStatus(422);
+    }
+
+    public function test_ingrediente_comprado_por_libra_se_ajusta_en_gramos(): void
+    {
+        $this->actuarComo('admin');
+        $azucarLb = $this->insumo('Azúcar morena', 'Libra', 0.60, 10, 0, ['permite_fraccion' => true]);
+        $cafe = $this->plato('Café', 1.50);
+        $this->receta($cafe, [[$azucarLb, 'Gramo', 10]])->assertCreated();
+
+        // Se muestra como se mide al preparar: 10 g, no 0.022 lb
+        $this->getJson('/api/pos/catalogo')->assertJsonFragment(['producto_id' => $azucarLb->id, 'base' => 10, 'unidad' => 'g']);
+
+        // Doble azúcar (20 g) en 2 cafés: salen 40 g = 0.0882 lb
+        $this->postJson('/api/pos/ventas', [
+            'uuid' => (string) Str::uuid(), 'caja_id' => $this->caja->id,
+            'items' => [['producto_id' => $cafe->id, 'cantidad' => 2, 'ajustes' => [['producto_id' => $azucarLb->id, 'cantidad' => 20]]]],
+            'pagos' => [['metodo_pago_id' => MetodoPago::where('nombre', 'Efectivo')->value('id'), 'monto' => 3]],
+        ])->assertCreated();
+        $this->assertEqualsWithDelta(10 - 40 / 453.59237, $this->stock($azucarLb), 0.0001);
+        $this->assertSame('Café (Azúcar morena: 20 g (lleva 10 g))', Venta::first()->detalles()->first()->nombre_producto);
     }
 
     public function test_gasto_en_mililitros_de_un_insumo_comprado_por_galon(): void

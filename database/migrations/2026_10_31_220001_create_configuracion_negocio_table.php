@@ -16,6 +16,11 @@ return new class extends Migration
             $table->id();
             $table->string('nombre', 200);
             $table->string('razon_social', 200)->nullable();
+            // Datos fiscales del encabezado del ticket
+            $table->string('nit', 30)->nullable();
+            $table->string('nrc', 30)->nullable();
+            $table->string('actividad_economica', 200)->nullable();
+            $table->string('tipo_establecimiento', 100)->nullable()->default('Sucursal / Agencia');
             $table->string('direccion', 300)->nullable();
             $table->string('telefono', 30)->nullable();
             $table->string('correo', 100)->nullable();

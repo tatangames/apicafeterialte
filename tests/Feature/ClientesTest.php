@@ -22,6 +22,8 @@ use Tests\TestCase;
 
 class ClientesTest extends TestCase
 {
+    protected bool $turnoSigueAlUsuario = true;
+
     private Caja $caja;
     private TurnoCaja $turno;
     private Producto $pan;

@@ -44,6 +44,8 @@ class TransporteFalso implements Transporte
 
 class ImpresionTest extends TestCase
 {
+    protected bool $turnoSigueAlUsuario = true;
+
     private TransporteFalso $transporte;
     private Caja $caja;
     private TurnoCaja $turno;
@@ -104,14 +106,46 @@ class ImpresionTest extends TestCase
 
         $texto = $this->transporte->texto();
         $this->assertStringContainsString('Panadería Eduardo', $texto);
-        $this->assertStringContainsString('Ticket T-000001', $texto);
+        $this->assertStringContainsString('Recibo', $texto);
+        $this->assertStringContainsString('Nombre: Consumidor Final', $texto);
+        $this->assertStringContainsString('No. de Venta: 000001', $texto);
         $this->assertStringContainsString('Pan francés', $texto);
-        $this->assertStringContainsString('$1.50', $texto);
-        $this->assertStringContainsString('Cambio', $texto);
+        $this->assertStringContainsString('Total: $ 1.50', $texto);
+        $this->assertStringContainsString('Un dólar Con Cincuenta Centavos', $texto);
+        $this->assertStringContainsString('Condición de la operación: Efectivo', $texto);
+        $this->assertStringContainsString('Cambio: $ 3.50', $texto);
 
         $bytes = $this->transporte->enviados[0]['bytes'];
         $this->assertStringContainsString("\x1Bp\x00\x19\xFA", $bytes);   // cajón por el pin 2
         $this->assertStringContainsString("\x1DV\x42\x00", $bytes);       // corte de papel
+    }
+
+    public function test_ticket_lleva_los_datos_fiscales_del_negocio(): void
+    {
+        \App\Models\ConfiguracionNegocio::actual()->update([
+            'razon_social' => 'FLAVIOS SAS DE CV', 'direccion' => 'Plaza la constitución local #14, METAPAN',
+            'nit' => '058416726', 'nrc' => '0', 'telefono' => '5644480140',
+        ]);
+        $this->impresora(['predeterminada' => true]);
+        $this->actuarComo('cajero');
+        $id = $this->vender([['producto_id' => $this->pan->id, 'cantidad' => 2]], 'Efectivo', 0.30);
+
+        $this->postJson("/api/impresion/ventas/{$id}", ['caja_id' => $this->caja->id])->assertJsonPath('impreso', true);
+
+        $texto = $this->transporte->texto();
+        foreach (['FLAVIOS SAS DE CV', 'NIT: 058416726', 'NRC: 0', 'Tipo de establecimiento:', 'Sucursal / Agencia', 'Tel: 5644480140', 'Datos del receptor', 'Total en letras:'] as $dato) {
+            $this->assertStringContainsString($dato, $texto);
+        }
+    }
+
+    public function test_total_en_letras(): void
+    {
+        $this->assertSame('Seis dólares Con Cinco Centavos', \App\Support\NumeroALetras::dolares(6.05));
+        $this->assertSame('Un dólar Con Cero Centavos', \App\Support\NumeroALetras::dolares(1));
+        $this->assertSame('Veintiún dólares Con Cincuenta Centavos', \App\Support\NumeroALetras::dolares(21.50));
+        $this->assertSame('Ciento Quince dólares Con Un Centavo', \App\Support\NumeroALetras::dolares(115.01));
+        $this->assertSame('Mil Doscientos Treinta y Cuatro dólares Con Noventa y Nueve Centavos', \App\Support\NumeroALetras::dolares(1234.99));
+        $this->assertSame('Cero dólares Con Setenta y Cinco Centavos', \App\Support\NumeroALetras::dolares(0.75));
     }
 
     public function test_reimpresion_es_copia_y_no_abre_el_cajon(): void
@@ -185,6 +219,21 @@ class ImpresionTest extends TestCase
         $this->assertCount(1, $this->transporte->enviados);
     }
 
+    public function test_prueba_de_produccion_imprime_la_comanda_de_ejemplo(): void
+    {
+        $impresora = $this->impresora();
+        $this->actuarComo('admin');
+
+        $this->postJson("/api/admin/impresora/{$impresora->id}/test-produccion")->assertOk()->assertJsonPath('success', true);
+
+        $texto = $this->transporte->texto();
+        foreach (['#031719', 'Solicitud de producción', 'Mesa: MESA 1', 'Ticket 1', 'CANT    DESCRIPCIÓN',
+            '1       Ice latte', '* saborizante caramelo', '* leche deslactosada', 'ORIGINAL'] as $linea) {
+            $this->assertStringContainsString($linea, $texto);
+        }
+        $this->assertStringNotContainsString('$', $texto);
+    }
+
     public function test_listado_de_trabajos_solo_para_quien_gestiona_impresoras(): void
     {
         $this->actuarComo('cajero');
@@ -192,6 +241,27 @@ class ImpresionTest extends TestCase
 
         $this->actuarComo('admin');
         $this->getJson('/api/impresion/trabajos?estado=error')->assertOk()->assertJsonPath('total', 0);
+    }
+
+    public function test_eliminar_impresiones_con_error_una_o_todas(): void
+    {
+        $trabajo = fn (string $estado) => TrabajoImpresion::create(['tipo' => 'cierre', 'estado' => $estado, 'intentos' => 1,
+            'error' => $estado === 'error' ? 'No se pudo conectar' : null, 'contenido' => 'x']);
+        [$e1, $e2, $e3, $ok] = [$trabajo('error'), $trabajo('error'), $trabajo('error'), $trabajo('impreso')];
+
+        $this->actuarComo('cajero');
+        $this->deleteJson("/api/impresion/trabajos/{$e1->id}")->assertStatus(403);
+
+        $this->actuarComo('admin');
+        $this->deleteJson("/api/impresion/trabajos/{$ok->id}")->assertStatus(422); // lo impreso no se borra
+        $this->deleteJson("/api/impresion/trabajos/{$e1->id}")->assertOk();
+        $this->assertNull(TrabajoImpresion::find($e1->id));
+
+        $this->deleteJson('/api/impresion/trabajos')->assertOk()->assertJsonPath('message', '2 error(es) de impresión eliminado(s)');
+        $this->assertSame(0, TrabajoImpresion::where('estado', 'error')->count());
+        $this->assertNotNull(TrabajoImpresion::find($ok->id));
+        $this->assertDatabaseHas('auditorias', ['accion' => 'eliminar_errores']);
+        $this->assertNotNull($e2->id + $e3->id);
     }
 
     // ── Comandas ────────────────────────────────────────────────
@@ -221,11 +291,39 @@ class ImpresionTest extends TestCase
         $horno = mb_convert_encoding($porImpresora['Horno']['bytes'], 'UTF-8', 'CP850');
         $barra = mb_convert_encoding($porImpresora['Barra']['bytes'], 'UTF-8', 'CP850');
 
-        $this->assertStringContainsString('COCINA', $horno);
-        $this->assertStringContainsString('6  Pan francés', $horno);
+        $this->assertStringContainsString('PANADER', $horno);
+        $this->assertStringContainsString('6       Pan francés', $horno);
+        $this->assertStringContainsString('Solicitud de producción', $horno);
+        $this->assertStringContainsString('ORIGINAL', $horno);
         $this->assertStringNotContainsString('Café', $horno);
-        $this->assertStringContainsString('2  Café con leche', $barra);
+        $this->assertStringContainsString('2       Café con leche', $barra);
         $this->assertStringNotContainsString('$', $barra); // la comanda no lleva precios
+        // Cada ticket dice en grande de qué área es
+        $this->assertStringContainsString('** COCINA **', $horno);
+        $this->assertStringContainsString('** BARRA **', $barra);
+    }
+
+    public function test_cocina_y_barra_en_la_misma_impresora_salen_en_tickets_separados(): void
+    {
+        $unica = $this->impresora(['predeterminada' => true]);
+        $this->area('Cocina', $this->panes, $unica);
+        $this->area('Barra', $this->bebidas, $unica);
+
+        $this->actuarComo('cajero');
+        $id = $this->vender([['producto_id' => $this->pan->id, 'cantidad' => 6], ['producto_id' => $this->cafe->id, 'cantidad' => 2]], 'Efectivo', 5);
+        $this->postJson("/api/impresion/ventas/{$id}", ['comandas' => true])->assertJsonCount(3, 'trabajos'); // ticket + 2 comandas
+
+        $comandas = collect($this->transporte->enviados)->map(fn ($e) => mb_convert_encoding($e['bytes'], 'UTF-8', 'CP850'))
+            ->filter(fn ($t) => str_contains($t, 'Solicitud de producción'))->values();
+        $this->assertCount(2, $comandas);
+        $cocina = $comandas->first(fn ($t) => str_contains($t, '** COCINA **'));
+        $barra = $comandas->first(fn ($t) => str_contains($t, '** BARRA **'));
+        $this->assertNotNull($cocina);
+        $this->assertNotNull($barra);
+        $this->assertStringContainsString('Pan francés', $cocina);
+        $this->assertStringNotContainsString('Café', $cocina);
+        $this->assertStringContainsString('Café con leche', $barra);
+        $this->assertStringNotContainsString('Pan francés', $barra);
     }
 
     public function test_venta_de_mostrador_sin_area_sale_en_comanda_general(): void
@@ -237,8 +335,13 @@ class ImpresionTest extends TestCase
         $this->postJson("/api/impresion/ventas/{$id}", ['comandas' => true])->assertJsonCount(2, 'trabajos');
 
         $comanda = $this->transporte->texto(1);
-        $this->assertStringContainsString('COMANDA', $comanda);
-        $this->assertStringContainsString('6  Pan francés', $comanda);
+        $this->assertStringContainsString('Solicitud de producción', $comanda);
+        // Mismo formato que la comanda de mesa: número de la venta, Mostrador y ORIGINAL
+        foreach (['#000001', 'Solicitud de producción', 'Mostrador', 'CANT    DESCRIPCIÓN', 'ORIGINAL'] as $linea) {
+            $this->assertStringContainsString($linea, $comanda);
+        }
+        $this->assertStringContainsString('6       Pan francés', $comanda);
+        $this->assertStringNotContainsString('** ', $comanda); // sin área: comanda general, sin encabezado de área
     }
 
     public function test_comandas_de_precuenta_con_notas(): void
@@ -256,7 +359,7 @@ class ImpresionTest extends TestCase
 
         $texto = $this->transporte->texto();
         $this->assertStringContainsString('Encargo Sra. Ana', $texto);
-        $this->assertStringContainsString('> bien tostado', $texto);
+        $this->assertStringContainsString('* bien tostado', $texto);
     }
 
     // ── Cierre, prueba y cajón ──────────────────────────────────

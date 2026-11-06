@@ -153,6 +153,9 @@ class InventarioService
         $inventario->stock_actual = $stockResultante;
         $inventario->save();
 
+        // Aviso si el producto acaba de llegar a su mínimo o de quedar en negativo
+        NotificacionService::revisarStock($producto, $stockAnterior, $stockResultante, (float) $inventario->stock_minimo);
+
         // Registrar movimiento (historial completo)
         return MovimientoInventario::create([
             'producto_id'      => $productoId,

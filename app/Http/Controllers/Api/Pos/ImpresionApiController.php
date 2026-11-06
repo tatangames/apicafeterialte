@@ -120,4 +120,31 @@ class ImpresionApiController extends Controller
 
         return $this->resultado([ImpresionService::reintentar($trabajo, $otra)]);
     }
+
+    // DELETE /impresion/trabajos/{trabajo}: quita de la lista un error que ya no importa (no se imprime)
+    public function eliminar(TrabajoImpresion $trabajo)
+    {
+        if ($trabajo->estado !== 'error') {
+            return response()->json(['success' => false, 'message' => 'Solo se quitan las impresiones con error'], 422);
+        }
+
+        AuditoriaService::registrar('impresion', 'eliminar_error', $trabajo, [
+            'tipo' => $trabajo->tipo, 'error' => $trabajo->error, 'impresora' => $trabajo->impresora?->alias,
+        ]);
+        $trabajo->delete();
+
+        return response()->json(['success' => 1, 'message' => 'Error de impresión eliminado']);
+    }
+
+    // DELETE /impresion/trabajos: quita todas las impresiones con error
+    public function eliminarErrores()
+    {
+        $total = TrabajoImpresion::where('estado', 'error')->count();
+        if ($total > 0) {
+            AuditoriaService::registrar('impresion', 'eliminar_errores', null, null, ['cantidad' => $total]);
+            TrabajoImpresion::where('estado', 'error')->delete();
+        }
+
+        return response()->json(['success' => 1, 'message' => $total ? "{$total} error(es) de impresión eliminado(s)" : 'No había errores']);
+    }
 }

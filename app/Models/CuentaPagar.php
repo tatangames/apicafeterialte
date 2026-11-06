@@ -33,6 +33,11 @@ class CuentaPagar extends Model
         return $this->belongsTo(Compra::class);
     }
 
+    public function notasCredito()
+    {
+        return $this->hasMany(NotaCreditoProveedor::class, 'cuenta_pagar_id');
+    }
+
     public function estaVencida(): bool
     {
         return $this->estado === 'pendiente' && $this->fecha_vencimiento->lt(today());

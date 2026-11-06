@@ -11,6 +11,10 @@ class ConfiguracionNegocio extends Model
     protected $fillable = [
         'nombre',
         'razon_social',
+        'nit',
+        'nrc',
+        'actividad_economica',
+        'tipo_establecimiento',
         'direccion',
         'telefono',
         'correo',

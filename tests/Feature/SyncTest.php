@@ -62,7 +62,7 @@ class SyncTest extends TestCase
 
         $this->sync($datos)
             ->assertJsonPath('resultados.0.estado', 'creada')
-            ->assertJsonPath('resultados.0.numero', 'T-000001')
+            ->assertJsonPath('resultados.0.numero', '000001')
             ->assertJsonPath('resultados.0.conflictos', []);
 
         $venta = Venta::first();
@@ -212,5 +212,29 @@ class SyncTest extends TestCase
 
         $this->actuarComo('cajero');
         $this->getJson('/api/pos/ping')->assertOk();
+    }
+
+    public function test_venta_offline_con_extras_respeta_su_precio_y_los_muestra(): void
+    {
+        $this->actuarComo('admin');
+        $this->pan->update(['controla_stock' => true, 'se_vende' => true, 'activo' => true]);
+        $grupo = \App\Models\GrupoModificador::create(['nombre' => 'Relleno']);
+        $grupo->productos()->attach($this->pan->id);
+        $queso = \App\Models\Modificador::create(['grupo_id' => $grupo->id, 'nombre' => 'Queso', 'precio' => 0.10]);
+
+        // 10 panes con queso a $0.25 c/u: sin conflicto de precio, el nombre lleva el extra y la nota
+        $this->sync($this->ventaOffline(['items' => [[
+            'producto_id' => $this->pan->id, 'cantidad' => 10, 'precio_unitario' => 0.25,
+            'modificadores' => [$queso->id], 'notas' => 'tostados',
+        ]], 'pagos' => [['metodo_pago_id' => MetodoPago::where('nombre', 'Efectivo')->value('id'), 'monto' => 3]]]))
+            ->assertJsonPath('resultados.0.estado', 'creada')->assertJsonPath('resultados.0.conflictos', []);
+        $this->assertSame('Pan francés (Queso) · tostados', Venta::first()->detalles()->first()->nombre_producto);
+
+        // Si el extra ya no existe al sincronizar, la venta entra igual y queda el aviso
+        $queso->update(['activo' => false]);
+        $res = $this->sync($this->ventaOffline(['numero_provisional' => 'OFF-1-000002', 'items' => [[
+            'producto_id' => $this->pan->id, 'cantidad' => 1, 'precio_unitario' => 0.25, 'modificadores' => [$queso->id],
+        ]]]))->assertJsonPath('resultados.0.estado', 'creada');
+        $this->assertStringContainsString('se registró sin extras', implode(' ', $res->json('resultados.0.conflictos')));
     }
 }

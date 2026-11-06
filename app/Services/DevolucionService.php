@@ -33,7 +33,7 @@ class DevolucionService
             return $existente;
         }
 
-        $autorizador = AutorizacionService::autorizar($usuario, 'pos.devolver', 'Registrar una devolución solo lo puede hacer el administrador');
+        $autorizador = AutorizacionService::autorizar($usuario, 'pos.devolver', 'Registrar una devolución necesita autorización del administrador');
 
         return DB::transaction(function () use ($venta, $items, $motivo, $cajaId, $metodoPagoId, $uuid, $usuario, $autorizador) {
             $venta = Venta::whereKey($venta->id)->lockForUpdate()->first();
@@ -49,6 +49,7 @@ class DevolucionService
             if (!$turno) {
                 throw new NegocioException('Abre el turno de caja para registrar el reembolso');
             }
+            CajaService::exigirTurnoPropio($turno);
 
             $metodo = $metodoPagoId ? MetodoPago::find($metodoPagoId) : MetodoPago::efectivo();
             if (!$metodo || !$metodo->activo) {

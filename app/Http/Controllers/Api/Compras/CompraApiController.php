@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Compra;
 use App\Models\CompraDetalle;
 use App\Models\CuentaPagar;
+use App\Models\NotaCreditoProveedor;
 use App\Models\PagoProveedor;
 use App\Models\Producto;
 use App\Models\Proveedor;
@@ -361,6 +362,48 @@ class CompraApiController extends Controller
             'success'   => 1,
             'message'   => "Pago {$pago->numero} anulado",
             'proveedor' => ProveedorApiController::formato($pago->proveedor->fresh()),
+        ]);
+    }
+
+    // POST /cuentas-pagar/{cuenta}/notas-credito {monto, motivo, documento?}: rebaja lo que se debe sin mover caja
+    public function notaCredito(Request $request, CuentaPagar $cuenta)
+    {
+        $validator = validator($request->all(), [
+            'monto'     => 'required|numeric|min:0.01',
+            'motivo'    => 'required|string|max:300',
+            'documento' => 'nullable|string|max:50',
+        ], [
+            'monto.required'  => 'Escribe el monto a rebajar',
+            'monto.min'       => 'El monto debe ser mayor a 0',
+            'motivo.required' => 'Explica por qué se rebaja',
+        ]);
+        if ($validator->fails()) {
+            return $this->errorValidacion($validator);
+        }
+
+        $nota = CuentaPagarService::registrarNotaCredito($cuenta, (float) $request->monto, trim($request->motivo), $request->documento, $request->user());
+
+        return response()->json([
+            'success' => 1,
+            'message' => "Nota {$nota->numero} registrada: se rebajó $" . number_format((float) $nota->monto, 2) . ' de lo que se debe',
+            'cuenta'  => CuentaPagarService::formatoCuenta($cuenta->fresh()),
+        ]);
+    }
+
+    // POST /cuentas-pagar/notas-credito/{nota}/anular {motivo}
+    public function anularNotaCredito(Request $request, NotaCreditoProveedor $nota)
+    {
+        $validator = validator($request->all(), ['motivo' => 'required|string|max:300'], ['motivo.required' => 'Indica el motivo de la anulación']);
+        if ($validator->fails()) {
+            return $this->errorValidacion($validator);
+        }
+
+        $nota = CuentaPagarService::anularNotaCredito($nota, trim($request->motivo), $request->user());
+
+        return response()->json([
+            'success' => 1,
+            'message' => "Nota {$nota->numero} anulada: el monto vuelve a deberse",
+            'cuenta'  => CuentaPagarService::formatoCuenta($nota->cuenta->fresh()),
         ]);
     }
 }

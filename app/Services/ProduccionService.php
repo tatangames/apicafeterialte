@@ -185,6 +185,44 @@ class ProduccionService
             ->all();
     }
 
+    /**
+     * Lo que lleva UNA unidad vendida, por insumo y en la unidad del inventario
+     * (sin merma): Huevos Divorciados → 2 u Huevo, 2 u Pan francés. Es lo que el
+     * mesero puede quitar o aumentar ("solo 1 huevo") sin cambiar el precio.
+     * @return array [['producto_id', 'nombre', 'base', 'unidad'], ...]
+     */
+    public static function ingredientesPorUnidad(Receta $receta): array
+    {
+        $receta->loadMissing(['ingredientes.producto.unidadMedida', 'ingredientes.unidad']);
+        $rendimiento = (float) $receta->rendimiento ?: 1;
+
+        return $receta->ingredientes
+            ->filter(fn (RecetaIngrediente $i) => $i->producto->controla_stock)
+            ->groupBy('producto_id')
+            ->map(function ($grupo, $id) use ($rendimiento) {
+                $producto = $grupo->first()->producto;
+                // Se muestra en la unidad en que se escribió la receta (10 g de azúcar, no 0.022 lb),
+                // que es como lo mide quien prepara. Si el insumo aparece con unidades distintas,
+                // se usa la del inventario. Los ajustes se guardan como proporción de esta base,
+                // así que el descuento de inventario no depende de la unidad que se muestre.
+                $unidadReceta = $grupo->pluck('unidad')->filter()->unique('id');
+                $destino = $unidadReceta->count() === 1 ? $unidadReceta->first() : $producto->unidadMedida;
+                $base = $grupo->sum(fn (RecetaIngrediente $i) => $destino && $i->unidad
+                    ? $i->unidad->convertirA((float) $i->cantidad, $destino) : (float) $i->cantidad);
+
+                return [
+                    'producto_id' => (int) $id,
+                    'nombre'      => $producto->nombre,
+                    'base'        => round($base / $rendimiento, 4),
+                    'unidad'      => $destino?->abreviatura,
+                ];
+            })
+            ->filter(fn ($i) => $i['base'] > 0)
+            ->sortBy('nombre')
+            ->values()
+            ->all();
+    }
+
     // Activa una versión (la que estaba activa del mismo producto se desactiva) o la desactiva
     public static function activarReceta(Receta $receta, bool $activa): Receta
     {

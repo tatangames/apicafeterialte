@@ -45,7 +45,7 @@ class CuentaCobrarService
             . ' de crédito disponible (límite $' . number_format((float) $cliente->limite_credito, 2) . ')';
 
         try {
-            return AutorizacionService::autorizar($usuario, 'clientes.credito_exceder', "{$mensaje}: solo lo puede hacer el administrador");
+            return AutorizacionService::autorizar($usuario, 'clientes.credito_exceder', "{$mensaje}: necesita autorización del administrador");
         } catch (NegocioException $e) {
             if (!$offline) {
                 throw $e;
@@ -163,6 +163,7 @@ class CuentaCobrarService
                 if (!$turno) {
                     throw new NegocioException('Abre el turno de caja para recibir el abono');
                 }
+                CajaService::exigirTurnoPropio($turno);
 
                 $numero = CorrelativoService::siguiente('abono', 'AB');
 
@@ -236,7 +237,7 @@ class CuentaCobrarService
      */
     public static function anularAbono(Abono $abono, string $motivo, Administrador $usuario): Abono
     {
-        $autorizador = AutorizacionService::autorizar($usuario, 'pos.anular', 'Anular un abono solo lo puede hacer el administrador');
+        $autorizador = AutorizacionService::autorizar($usuario, 'pos.anular', 'Anular un abono necesita autorización del administrador');
 
         return DB::transaction(function () use ($abono, $motivo, $usuario, $autorizador) {
             $abono = Abono::whereKey($abono->id)->lockForUpdate()->first();

@@ -27,6 +27,10 @@ class NegocioApiController extends Controller
         $validator = validator($request->all(), [
             'nombre'                  => 'required|string|max:200',
             'razon_social'            => 'nullable|string|max:200',
+            'nit'                     => 'nullable|string|max:30',
+            'nrc'                     => 'nullable|string|max:30',
+            'actividad_economica'     => 'nullable|string|max:200',
+            'tipo_establecimiento'    => 'nullable|string|max:100',
             'direccion'               => 'nullable|string|max:300',
             'telefono'                => 'nullable|string|max:30',
             'correo'                  => 'nullable|email|max:100',
@@ -34,6 +38,8 @@ class NegocioApiController extends Controller
             'moneda'                  => 'required|string|size:3',
             'simbolo_moneda'          => 'required|string|max:5',
             'permitir_stock_negativo' => 'required|boolean',
+            'descuento_max_sin_autorizacion' => 'nullable|numeric|min:0|max:100',
+            'cierre_ciego'            => 'nullable|boolean',
             'mensaje_ticket'          => 'nullable|string|max:500',
         ], [
             'nombre.required'         => 'El nombre del negocio es requerido',
@@ -60,9 +66,12 @@ class NegocioApiController extends Controller
 
         try {
             $datos = $validator->safe()->except('logo');
+            if (array_key_exists('descuento_max_sin_autorizacion', $datos)) {
+                $datos['descuento_max_sin_autorizacion'] = (float) ($datos['descuento_max_sin_autorizacion'] ?? 0);
+            }
 
             // Normalizar booleanos que llegan como string desde multipart
-            foreach (['permitir_stock_negativo'] as $campo) {
+            foreach (['permitir_stock_negativo', 'cierre_ciego'] as $campo) {
                 if (array_key_exists($campo, $datos)) {
                     $datos[$campo] = filter_var($datos[$campo], FILTER_VALIDATE_BOOLEAN);
                 }

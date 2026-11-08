@@ -26,7 +26,9 @@ class StarRaster
     {
         // 80 mm = 576 puntos imprimibles, 58 mm = 384
         $puntos = $this->ancho >= 42 ? 576 : 384;
-        $celda = $puntos / $this->ancho;
+        // El documento puede pedir sus propias columnas (ESC ~ n, ver EscPos::anchoRaster): letra más grande
+        $columnas = preg_match('/\x1B~(.)/s', $bytes, $m) && ord($m[1]) >= 16 ? min(ord($m[1]), $this->ancho) : $this->ancho;
+        $celda = $puntos / $columnas;
         $altoLinea = (int) round($celda * self::ALTO_LINEA);
 
         [$lineas, $cortar, $cajon] = $this->interpretar($bytes, $altoLinea);
@@ -86,6 +88,7 @@ class StarRaster
                 switch ($cmd) {
                     case '@': $estado = ['alinear' => 0, 'negrita' => false, 'dobleAncho' => 1, 'dobleAlto' => 1]; $i += 1; break;
                     case 't': $i += 2; break;
+                    case '~': $i += 2; break; // columnas del documento (ya leídas)
                     case 'a': $estado['alinear'] = $arg; $i += 2; break;
                     case 'E': $estado['negrita'] = $arg === 1; $i += 2; break;
                     case 'd':

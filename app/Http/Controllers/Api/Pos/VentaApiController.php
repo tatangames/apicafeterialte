@@ -25,7 +25,7 @@ class VentaApiController extends Controller
     public static function formato(Venta $venta): array
     {
         $venta->loadMissing([
-            'detalles', 'pagos.metodoPago', 'caja', 'usuario:id,nombre', 'anuladaPor:id,nombre', 'anulacionAutorizadaPor:id,nombre',
+            'detalles.producto', 'pagos.metodoPago', 'caja', 'usuario:id,nombre', 'anuladaPor:id,nombre', 'anulacionAutorizadaPor:id,nombre',
             'descuentoAutorizadoPor:id,nombre', 'devoluciones.usuario:id,nombre', 'devoluciones.metodoPago',
             'cliente:id,nombre,documento,telefono', 'cuentaCobrar', 'pedido:id,numero,tipo',
         ]);
@@ -75,6 +75,9 @@ class VentaApiController extends Controller
                 'id'                => $d->id,
                 'producto_id'       => $d->producto_id,
                 'nombre'            => $d->nombre_producto,
+                // Con extras, el ticket muestra el producto solo y cada extra debajo («* Leche»)
+                'nombre_base'       => $d->partesTicket()[0],
+                'extras'            => $d->partesTicket()[1],
                 'unidad'            => $d->unidad,
                 'cantidad'          => (float) $d->cantidad,
                 'precio_unitario'   => (float) $d->precio_unitario,

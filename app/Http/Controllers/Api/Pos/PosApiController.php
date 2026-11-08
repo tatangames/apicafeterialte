@@ -48,7 +48,7 @@ class PosApiController extends Controller
                 'controla_stock'   => $p->controla_stock,
                 'consumo_interno'  => $p->consumo_interno,
                 // Área de su comanda (null = comanda general); sirve para imprimir desde el navegador
-                'area'             => $p->categorias->map(fn ($c) => $c->area)->first(fn ($a) => $a && $a->activo)?->nombre,
+                'area'             => $p->areaDeComanda()?->nombre,
                 'stock'            => $p->controla_stock ? (float) ($p->inventario->stock_actual ?? 0) : null,
                 'bajo_minimo'      => $p->controla_stock && InventarioService::enAlerta(
                     (float) ($p->inventario->stock_actual ?? 0),

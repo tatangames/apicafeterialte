@@ -31,6 +31,7 @@ return new class extends Migration
             $table->boolean('consumo_interno')->default(false);  // cena del personal, cortesías: no cobran, solo descuentan su receta
             $table->boolean('controla_stock')->default(true);    // lleva existencias
             $table->boolean('permite_fraccion')->default(false); // cantidades con decimales (peso)
+            $table->boolean('imprime_comanda')->default(true);   // false: se entrega directo (coca en lata), nunca manda comanda aunque su categoría tenga área
             $table->unsignedInteger('orden_pos')->default(0);
             $table->string('color_pos', 7)->nullable();          // #RRGGBB del botón en el POS
 

@@ -36,6 +36,7 @@ class Producto extends Model
         'consumo_interno',
         'controla_stock',
         'permite_fraccion',
+        'imprime_comanda',
         'orden_pos',
         'color_pos',
         'costo_unitario',
@@ -51,11 +52,26 @@ class Producto extends Model
         'consumo_interno'  => 'boolean',
         'controla_stock'   => 'boolean',
         'permite_fraccion' => 'boolean',
+        'imprime_comanda'  => 'boolean',
         'orden_pos'        => 'integer',
         'activo'           => 'boolean',
     ];
 
     // ─── Relaciones ───────────────────────────────────────────────
+    /**
+     * Área que prepara el producto (Cocina, Barra) según su categoría. Null si no pasa por
+     * preparación: su categoría no tiene área o el producto no imprime comanda (se entrega
+     * directo, como una coca en lata). Necesita categorias.area cargado.
+     */
+    public function areaDeComanda(): ?AreaPreparacion
+    {
+        if ($this->imprime_comanda === false) {
+            return null;
+        }
+
+        return $this->categorias->map(fn ($c) => $c->area)->first(fn ($a) => $a && $a->activo);
+    }
+
     public function categorias(): BelongsToMany
     {
         return $this->belongsToMany(

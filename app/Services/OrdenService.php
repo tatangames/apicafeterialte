@@ -337,8 +337,8 @@ class OrdenService
                     return $igual;
                 }
 
-                // El área de preparación sale de la categoría del producto
-                $area = $producto->categorias->map(fn ($c) => $c->area)->first(fn ($a) => $a && $a->activo);
+                // El área de preparación sale de la categoría del producto (sin área: se entrega sin comanda)
+                $area = $producto->areaDeComanda();
 
                 return OrdenItem::create([
                     'orden_id'        => $orden->id,
@@ -756,6 +756,8 @@ class OrdenService
                     'cantidad'     => (float) $i->cantidad,
                     'precio_orden' => (float) $i->precio_unitario,
                     'nombre_orden' => $i->descripcion(),
+                    // Para el ticket: el producto en su renglón y cada extra debajo («* Leche»)
+                    'extras_orden' => collect($i->modificadores ?? [])->pluck('opcion')->merge($i->textoAjustes())->filter()->values()->all(),
                     'modificadores_orden' => collect($i->modificadores ?? [])->pluck('id')->filter()->values()->all(),
                     'ajustes_orden'       => $i->factoresAjuste(),
                 ])->all(),

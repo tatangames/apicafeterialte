@@ -15,6 +15,14 @@ use Illuminate\Http\Request;
 
 class ImpresionApiController extends Controller
 {
+    // GET /impresion/offline?caja_id= — la tablet lo guarda para imprimir cuando no hay servidor
+    public function offline(Request $request)
+    {
+        $request->validate(['caja_id' => 'nullable|integer']);
+
+        return response()->json(['success' => 1] + ImpresionService::configuracionOffline($request->integer('caja_id') ?: null));
+    }
+
     private function formatoTrabajo(TrabajoImpresion $t): array
     {
         return [

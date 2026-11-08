@@ -229,7 +229,7 @@ class VentaService
             $nombre = $item['nombre_orden'] ?? null;
             $modificadores = $item['modificadores_orden'] ?? [];
             $ajustes = $item['ajustes_orden'] ?? [];
-            $extras = []; // para la comanda: un renglón por extra, cambio de receta y nota
+            $extras = $item['extras_orden'] ?? []; // para ticket y comanda: un renglón por extra, cambio de receta y nota
             // Venta directa con extras ("azúcar extra") o receta cambiada ("sin huevo"): el precio
             // lleva los extras, el nombre los muestra en ticket y comanda y el inventario baja lo que salió
             $precioEsperado = (float) $producto->precio_venta;

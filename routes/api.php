@@ -240,6 +240,7 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
 
     // ── IMPRESIÓN ─────────────────────────────────────────────
     Route::post('/impresion/ventas/{venta}', [ImpresionApiController::class, 'venta'])->middleware('permission:pos.vender|pos.historial');
+    Route::get('/impresion/offline', [ImpresionApiController::class, 'offline'])->middleware('permission:pos.vender');
     Route::post('/impresion/pedidos/{pedido}/comandas', [ImpresionApiController::class, 'comandasPedido'])->middleware('permission:pos.precuentas');
     Route::post('/impresion/turnos/{turno}', [ImpresionApiController::class, 'turno'])->middleware('permission:caja.cerrar|caja.historial|caja.arqueo');
     // caja.abrir_cajon se revisa en el controlador: sin él se pide el PIN de quien lo tenga

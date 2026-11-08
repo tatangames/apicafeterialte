@@ -372,11 +372,30 @@ class ImpresionService
 
     // ── Plantillas ─────────────────────────────────────────────
 
+    /** Columnas para el ticket de cobro: más grande y legible que las comandas en la Star de 80 mm. */
+    public const COLUMNAS_TICKET_STAR = 42;
+
+    /**
+     * En la Star (imprime imágenes) el ticket de cobro va a 42 columnas en papel de 80 mm:
+     * la letra sale ~14 % más grande. Las impresoras ESC/POS tienen la letra fija en el equipo.
+     */
+    public static function anchoTicket(Impresora $impresora): int
+    {
+        $ancho = (int) $impresora->ancho_caracteres;
+
+        return $impresora->tipo_impresion === 'star_raster' && $ancho > self::COLUMNAS_TICKET_STAR
+            ? self::COLUMNAS_TICKET_STAR
+            : $ancho;
+    }
+
     public static function ticket(Venta $venta, Impresora $impresora, bool $copia = false): EscPos
     {
         $negocio = ConfiguracionNegocio::actual();
-        $ancho = (int) $impresora->ancho_caracteres;
+        $ancho = self::anchoTicket($impresora);
         $doc = new EscPos($ancho);
+        if ($ancho !== (int) $impresora->ancho_caracteres) {
+            $doc->anchoRaster(); // la Star lo dibuja con letra más grande (menos columnas en el mismo papel)
+        }
         $numero = fn ($v) => number_format((float) $v, 2, '.', '');
 
         // ── Encabezado del emisor (como el recibo que ya usa el negocio) ──
@@ -411,8 +430,7 @@ class ImpresionService
         }
         $doc->linea('Fecha y hora de generación:')
             ->negrita()->linea($venta->fecha_venta->format('d-m-Y H:i'))->normal()
-            ->alinear('izquierda')
-            ->columnas('Emisor', trim($negocio->nombre . ' ' . ($venta->caja?->nombre ?? '')));
+            ->alinear('izquierda');
 
         // ── Receptor ──
         $doc->avanzar()->separador('=')->avanzar()
@@ -443,10 +461,19 @@ class ImpresionService
             ->negrita()->linea($fila('Cant', 'Descripción', 'Precio', 'Total'))->normal();
         foreach ($venta->detalles as $d) {
             // La descripción larga sigue en las líneas de abajo, en su misma columna
-            $partes = explode("\n", wordwrap($d->nombre_producto, max($cDesc - 1, 8), "\n", true));
+            // Con extras: el producto solo y cada extra en su renglón («* Leche»)
+            [$nombre, $extras] = $d->partesTicket();
+            $partes = explode("\n", wordwrap($nombre, max($cDesc - 1, 8), "\n", true));
             $doc->linea($fila($numero($d->cantidad), array_shift($partes), $numero($d->precio_unitario), $numero((float) $d->cantidad * (float) $d->precio_unitario)));
             foreach ($partes as $resto) {
                 $doc->linea(str_repeat(' ', $cCant) . $resto);
+            }
+            foreach ($extras as $extra) {
+                $renglones = explode("\n", wordwrap((string) $extra, max($cDesc - 3, 8), "\n", true));
+                $doc->linea(str_repeat(' ', $cCant) . '* ' . array_shift($renglones));
+                foreach ($renglones as $resto) {
+                    $doc->linea(str_repeat(' ', $cCant + 2) . $resto);
+                }
             }
             if ((float) $d->descuento > 0) {
                 $doc->linea($fila('', 'Descuento', '', '-' . $numero($d->descuento)));
@@ -688,10 +715,13 @@ class ImpresionService
      */
     private static function comandas(array $items, array $datos, string $documentoTipo, int $documentoId, ?int $usuarioId, ?Impresora $respaldo = null, bool $conGeneral = false): array
     {
-        $areaPorProducto = Producto::with('categorias.area.impresora')
+        $productos = Producto::with('categorias.area.impresora')
             ->whereIn('id', collect($items)->pluck('producto_id'))
             ->get()
-            ->mapWithKeys(fn ($p) => [$p->id => $p->categorias->map(fn ($c) => $c->area)->first(fn ($a) => $a && $a->activo)]);
+            ->keyBy('id');
+        $areaPorProducto = $productos->map(fn (Producto $p) => $p->areaDeComanda());
+        // Lo que se entrega directo (imprime_comanda apagado) no sale ni en la comanda general
+        $items = collect($items)->reject(fn ($i) => $productos[$i['producto_id']]?->imprime_comanda === false)->values()->all();
 
         $trabajos = [];
         foreach (collect($items)->groupBy(fn ($i) => $areaPorProducto[$i['producto_id']]?->id) as $areaId => $delArea) {
@@ -707,6 +737,54 @@ class ImpresionService
         }
 
         return $trabajos;
+    }
+
+    /**
+     * Lo que la tablet necesita para imprimir sola cuando no hay servidor: los datos del
+     * negocio para el encabezado, la impresora de tickets de la caja y a qué impresora va
+     * la comanda de cada producto (por su área de preparación).
+     */
+    public static function configuracionOffline(?int $cajaId): array
+    {
+        $negocio = ConfiguracionNegocio::actual();
+        $dato = fn (?Impresora $i) => $i ? [
+            'id'               => $i->id,
+            'alias'            => $i->alias,
+            'conexion'         => $i->conexion,
+            'ip'               => $i->ip_impresora,
+            'puerto'           => (int) ($i->puerto ?: 9100),
+            'tipo_impresion'   => $i->tipo_impresion,
+            'ancho_caracteres' => (int) $i->ancho_caracteres,
+            'cortar_papel'     => (bool) $i->cortar_papel,
+            'cash_drawer'      => $i->cash_drawer,
+        ] : null;
+
+        $areas = \App\Models\AreaPreparacion::with('impresora')->where('activo', true)->get();
+        $productos = Producto::with('categorias:id,area_preparacion_id')
+            ->where('se_vende', true)
+            ->where('imprime_comanda', true) // los que se entregan directo no llevan comanda
+            ->get(['id'])
+            ->mapWithKeys(fn ($p) => [$p->id => $p->categorias
+                ->map(fn ($c) => $c->area_preparacion_id)
+                ->first(fn ($id) => $id && $areas->contains('id', $id))])
+            ->filter();
+
+        return [
+            'negocio' => [
+                'nombre'               => $negocio->nombre,
+                'razon_social'         => $negocio->razon_social,
+                'direccion'            => $negocio->direccion,
+                'nit'                  => (string) $negocio->nit,
+                'nrc'                  => (string) $negocio->nrc,
+                'actividad_economica'  => $negocio->actividad_economica,
+                'tipo_establecimiento' => $negocio->tipo_establecimiento,
+                'telefono'             => $negocio->telefono,
+                'mensaje_ticket'       => $negocio->mensaje_ticket,
+            ],
+            'ticket'   => $dato(self::impresoraDeTickets($cajaId)),
+            'areas'    => $areas->map(fn ($a) => ['id' => $a->id, 'nombre' => $a->nombre, 'impresora' => $dato(self::impresoraDeArea($a))])->values(),
+            'productos' => $productos,
+        ];
     }
 
     // La impresora del área; si no tiene, la de comandas predeterminada

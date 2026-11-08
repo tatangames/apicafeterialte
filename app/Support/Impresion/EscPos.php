@@ -119,6 +119,17 @@ class EscPos
         return $this;
     }
 
+    /**
+     * Marca para StarRaster: dibujar este documento a sus propias columnas (letra más grande
+     * si son menos que las de la impresora). Solo se usa en documentos para impresoras Star,
+     * que reciben imagen; no es un comando ESC/POS.
+     */
+    public function anchoRaster(): self
+    {
+        $this->datos .= self::ESC . '~' . chr($this->ancho);
+        return $this;
+    }
+
     public function bytes(): string
     {
         return $this->datos;

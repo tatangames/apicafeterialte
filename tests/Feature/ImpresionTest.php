@@ -303,6 +303,75 @@ class ImpresionTest extends TestCase
         $this->assertStringContainsString('** BARRA **', $barra);
     }
 
+    public function test_producto_que_no_imprime_comanda_solo_lleva_el_ticket(): void
+    {
+        $this->impresora(['predeterminada' => true]);
+        $horno = $this->impresora(['alias' => 'Horno', 'uso' => 'comanda', 'ip_impresora' => '192.168.1.60', 'cash_drawer' => 'ninguno']);
+        $barra = $this->impresora(['alias' => 'Barra', 'uso' => 'comanda', 'ip_impresora' => '192.168.1.61', 'cash_drawer' => 'ninguno']);
+        $this->area('Cocina', $this->panes, $horno);
+        $this->area('Barra', $this->bebidas, $barra);
+        // El café está en Bebidas (área Barra) pero se entrega directo
+        $this->cafe->update(['imprime_comanda' => false]);
+
+        $this->actuarComo('cajero');
+        $id = $this->vender([['producto_id' => $this->pan->id, 'cantidad' => 6], ['producto_id' => $this->cafe->id, 'cantidad' => 2]], 'Efectivo', 5);
+        $this->postJson("/api/impresion/ventas/{$id}", ['comandas' => true])->assertJsonCount(2, 'trabajos'); // ticket + comanda de cocina
+
+        $impresoras = collect($this->transporte->enviados)->pluck('impresora');
+        $this->assertContains('Horno', $impresoras);
+        $this->assertNotContains('Barra', $impresoras);
+        $ticket = mb_convert_encoding(collect($this->transporte->enviados)->firstWhere('impresora', 'Mostrador')['bytes'], 'UTF-8', 'CP850');
+        $this->assertStringContainsString('Café con leche', $ticket); // en el ticket sí sale
+
+        // Sin conexión la tablet tampoco le manda comanda
+        $this->getJson("/api/impresion/offline?caja_id={$this->caja->id}")->assertOk()
+            ->assertJsonMissingPath("productos.{$this->cafe->id}");
+        // Y en el POS ya no dice a qué área va
+        $this->assertNull(collect($this->getJson('/api/pos/catalogo')->json('productos'))->firstWhere('id', $this->cafe->id)['area']);
+    }
+
+    public function test_en_la_star_el_ticket_de_cobro_sale_con_letra_mas_grande(): void
+    {
+        $star = $this->impresora(['predeterminada' => true, 'tipo_impresion' => 'star_raster', 'uso' => 'ambos']);
+        $epson = $this->impresora(['alias' => 'Epson']);
+
+        $this->actuarComo('cajero');
+        $venta = \App\Models\Venta::find($this->vender([['producto_id' => $this->pan->id, 'cantidad' => 2]]));
+
+        // Star: 42 columnas en vez de 48 (marca ESC ~ 42 para StarRaster); ESC/POS: igual que siempre
+        $this->assertStringContainsString("\x1B~" . chr(42), \App\Services\ImpresionService::ticket($venta, $star)->bytes());
+        $this->assertStringNotContainsString("\x1B~", \App\Services\ImpresionService::ticket($venta, $epson)->bytes());
+        // La comanda no cambia
+        $comanda = \App\Services\ImpresionService::comanda([['producto_id' => $this->pan->id, 'nombre' => 'Pan', 'cantidad' => 1, 'unidad' => null]], $star);
+        $this->assertStringNotContainsString("\x1B~", $comanda->bytes());
+
+        // La Star de 48 columnas lo dibuja igual que una de 42 (letra más grande), no a 48
+        $bytes = \App\Services\ImpresionService::ticket($venta, $star)->bytes();
+        $sinMarca = str_replace("\x1B~" . chr(42), '', $bytes);
+        $this->assertSame(\App\Support\Impresion\StarRaster::desdeEscPos($sinMarca, 42), \App\Support\Impresion\StarRaster::desdeEscPos($bytes, 48));
+        $this->assertNotSame(\App\Support\Impresion\StarRaster::desdeEscPos($sinMarca, 48), \App\Support\Impresion\StarRaster::desdeEscPos($bytes, 48));
+    }
+
+    public function test_configuracion_para_imprimir_sin_conexion(): void
+    {
+        $ticket = $this->impresora(['predeterminada' => true, 'tipo_impresion' => 'star_raster']);
+        $horno = $this->impresora(['alias' => 'Horno', 'uso' => 'comanda', 'ip_impresora' => '192.168.1.60', 'cash_drawer' => 'ninguno']);
+        $this->area('Cocina', $this->panes, $horno);
+
+        $this->actuarComo('cajero');
+        $res = $this->getJson("/api/impresion/offline?caja_id={$this->caja->id}")->assertOk();
+
+        $res->assertJsonPath('ticket.id', $ticket->id)
+            ->assertJsonPath('ticket.ip', '192.168.1.50')
+            ->assertJsonPath('ticket.tipo_impresion', 'star_raster')
+            ->assertJsonPath('areas.0.nombre', 'Cocina')
+            ->assertJsonPath('areas.0.impresora.ip', '192.168.1.60');
+        // El pan va a cocina; el café no tiene área (solo lleva el ticket)
+        $this->assertSame($res->json('areas.0.id'), $res->json("productos.{$this->pan->id}"));
+        $this->assertNull($res->json("productos.{$this->cafe->id}"));
+        $this->assertNotEmpty($res->json('negocio.nombre'));
+    }
+
     public function test_cocina_y_barra_en_la_misma_impresora_salen_en_tickets_separados(): void
     {
         $unica = $this->impresora(['predeterminada' => true]);

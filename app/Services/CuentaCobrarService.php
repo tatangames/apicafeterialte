@@ -297,7 +297,7 @@ class CuentaCobrarService
                 'fecha'       => $c->venta?->fecha_venta ?? $c->created_at,
                 'tipo'        => 'venta',
                 'documento'   => $c->venta?->numero,
-                'descripcion' => 'Venta al crédito · vence ' . $c->fecha_vencimiento->format('d/m/Y'),
+                'descripcion' => 'Venta al crédito · vence ' . $c->fecha_vencimiento->format('d-m-Y'),
                 'cargo'       => (float) $c->monto,
                 'abono'       => 0.0,
             ]);

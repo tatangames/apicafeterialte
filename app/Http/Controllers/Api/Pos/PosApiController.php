@@ -30,6 +30,9 @@ class PosApiController extends Controller
 
         $grupos = GrupoModificador::with(['opciones' => fn ($q) => $q->where('activo', true)])->where('activo', true)->get();
         $agotadas = \App\Http\Controllers\Api\Mesas\MesaApiController::opcionesAgotadas($grupos);
+        // Platos con receta: cuántos alcanzan con los insumos (solo cuenta sin stock negativo)
+        $stockInsumos = ProduccionService::stockDeInsumos($recetas);
+        $apartadoInsumos = $recetas->isEmpty() ? [] : \App\Services\OrdenService::insumosApartados();
 
         $productos = $lista->map(fn (Producto $p) => [
                 'id'               => $p->id,
@@ -54,6 +57,7 @@ class PosApiController extends Controller
                 // Extras (leche, endulzante) y receta ajustable ("sin huevo")
                 'grupos'           => $p->gruposModificadores->pluck('id'),
                 'receta'           => $recetas->has($p->id) ? ProduccionService::ingredientesPorUnidad($recetas->get($p->id)) : [],
+                'alcanza'          => $recetas->has($p->id) ? ProduccionService::alcanza($recetas->get($p->id), $stockInsumos, $apartadoInsumos) : null,
             ]);
 
         // Solo categorías que tienen productos a la venta

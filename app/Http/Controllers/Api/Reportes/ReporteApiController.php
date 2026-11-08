@@ -30,6 +30,7 @@ class ReporteApiController extends Controller
             'producto_id'  => 'nullable|integer',
             'proveedor_id' => 'nullable|integer',
             'categoria_id' => 'nullable|integer',
+            'usuario_id'   => 'nullable|integer',
             'clase'        => 'nullable|in:producto_terminado,materia_prima,reventa,empaque',
             'motivo'       => 'nullable|in:vencido,quemado,danado,otro',
             'limite'       => 'nullable|integer|min:1|max:500',

@@ -36,8 +36,8 @@
         </td>
         <td style="text-align: right;">
             <h1>Estado de cuenta</h1>
-            <div>Del {{ \Carbon\Carbon::parse($estado['desde'])->format('d/m/Y') }} al {{ \Carbon\Carbon::parse($estado['hasta'])->format('d/m/Y') }}</div>
-            <div class="muted">Emitido {{ $emitido->format('d/m/Y H:i') }}</div>
+            <div>Del {{ \Carbon\Carbon::parse($estado['desde'])->format('d-m-Y') }} al {{ \Carbon\Carbon::parse($estado['hasta'])->format('d-m-Y') }}</div>
+            <div class="muted">Emitido {{ $emitido->format('d-m-Y H:i') }}</div>
         </td>
     </tr>
 </table>
@@ -63,7 +63,7 @@
         <td><div class="muted">Saldo anterior</div><div class="valor">{{ $m($estado['saldo_anterior']) }}</div></td>
         <td><div class="muted">Compras al crédito</div><div class="valor">{{ $m($estado['cargos']) }}</div></td>
         <td><div class="muted">Abonos y devoluciones</div><div class="valor">{{ $m($estado['abonos']) }}</div></td>
-        <td><div class="muted">Saldo al {{ \Carbon\Carbon::parse($estado['hasta'])->format('d/m/Y') }}</div><div class="valor">{{ $m($estado['saldo_final']) }}</div></td>
+        <td><div class="muted">Saldo al {{ \Carbon\Carbon::parse($estado['hasta'])->format('d-m-Y') }}</div><div class="valor">{{ $m($estado['saldo_final']) }}</div></td>
         <td><div class="muted">Vencido hoy</div><div class="valor {{ $estado['vencido'] > 0 ? 'vencida' : '' }}">{{ $m($estado['vencido']) }}</div></td>
     </tr>
 </table>
@@ -77,7 +77,7 @@
         <tr><td colspan="5" class="muted">Saldo anterior</td><td class="num">{{ $m($estado['saldo_anterior']) }}</td></tr>
         @forelse($estado['movimientos'] as $mov)
             <tr>
-                <td>{{ \Carbon\Carbon::parse($mov['fecha'])->format('d/m/Y') }}</td>
+                <td>{{ \Carbon\Carbon::parse($mov['fecha'])->format('d-m-Y') }}</td>
                 <td>{{ $mov['documento'] }}</td>
                 <td>{{ $mov['descripcion'] }}</td>
                 <td class="num">{{ $mov['cargo'] > 0 ? $m($mov['cargo']) : '' }}</td>
@@ -100,8 +100,8 @@
         @foreach($estado['pendientes'] as $c)
             <tr>
                 <td>{{ $c['venta'] }}</td>
-                <td>{{ \Carbon\Carbon::parse($c['fecha'])->format('d/m/Y') }}</td>
-                <td>{{ \Carbon\Carbon::parse($c['fecha_vencimiento'])->format('d/m/Y') }}</td>
+                <td>{{ \Carbon\Carbon::parse($c['fecha'])->format('d-m-Y') }}</td>
+                <td>{{ \Carbon\Carbon::parse($c['fecha_vencimiento'])->format('d-m-Y') }}</td>
                 <td class="num">{{ $m($c['monto']) }}</td>
                 <td class="num">{{ $m($c['saldo']) }}</td>
                 <td class="{{ $c['vencida'] ? 'vencida' : '' }}">{{ $c['vencida'] ? "Vencida ({$c['dias_vencida']} días)" : 'Al día' }}</td>

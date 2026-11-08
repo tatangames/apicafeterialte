@@ -46,9 +46,10 @@ class FundamentosTest extends TestCase
             'permitir_stock_negativo'        => false,
             'descuento_max_sin_autorizacion' => 15,
             'cierre_ciego'                   => true,
-        ])->assertOk()->assertJsonPath('data.permitir_stock_negativo', false);
+            'aviso_cambio'                   => false,
+        ])->assertOk()->assertJsonPath('data.permitir_stock_negativo', false)->assertJsonPath('data.aviso_cambio', false);
 
-        $this->assertDatabaseHas('configuracion_negocio', ['telefono' => '2222-0000', 'descuento_max_sin_autorizacion' => 15, 'cierre_ciego' => true]);
+        $this->assertDatabaseHas('configuracion_negocio', ['telefono' => '2222-0000', 'descuento_max_sin_autorizacion' => 15, 'cierre_ciego' => true, 'aviso_cambio' => false]);
         $this->assertDatabaseHas('auditorias', ['modulo' => 'configuracion', 'accion' => 'actualizar']);
     }
 

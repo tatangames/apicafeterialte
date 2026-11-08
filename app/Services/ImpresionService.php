@@ -18,6 +18,8 @@ use App\Support\Impresion\StarRaster;
 use App\Support\Impresion\Transporte;
 use App\Support\Impresion\TransporteRed;
 use App\Support\Impresion\TransporteWindows;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * Arma los documentos (ticket, comanda, cierre, prueba) en ESC/POS, los envía
@@ -107,7 +109,7 @@ class ImpresionService
             'unidad'      => null,
             'notas'       => $d->notas,
         ])->all(), ['numero' => $pedido->numero, 'lugar' => 'Pedido especial', 'cuenta' => $pedido->nombre],
-            'pedido', $pedido->id, $usuarioId, self::impresoraDeTickets(null));
+            'pedido', $pedido->id, $usuarioId, self::impresoraDeTickets(null), true);
 
         if (!$trabajos) {
             throw new NegocioException('No hay impresora de comandas ni de tickets configurada');
@@ -255,17 +257,23 @@ class ImpresionService
         $doc = new EscPos($impresora->ancho_caracteres);
         $doc->alinear('centro')->negrita()->linea($negocio->nombre)->grande(true, false)->linea('PRECUENTA')->normal()
             ->alinear('izquierda')->separador()
-            ->columnas($orden->terminal->nombre . ($cuenta ? " · {$cuenta}" : ''), now()->format('d/m/Y H:i'))
+            ->columnas($orden->terminal->nombre . ($cuenta ? " · {$cuenta}" : ''), now()->format('d-m-Y H:i'))
             ->separador();
 
         $total = 0.0;
         foreach ($items as $i) {
             $cantidad = rtrim(rtrim(number_format((float) $i->cantidad, 3, '.', ''), '0'), '.');
-            $extras = collect($i->modificadores ?? [])->pluck('opcion')->join(', ');
             $subtotal = round((float) $i->cantidad * (float) $i->precio_unitario, 2);
             $total += $subtotal;
-            $doc->parrafo($i->nombre_producto . ($extras ? " ({$extras})" : ''))
-                ->columnas("  {$cantidad} x " . $dinero($i->precio_unitario), $dinero($subtotal));
+            $doc->parrafo($i->nombre_producto);
+            // Extras y cambios debajo, un renglón cada uno con «*», como en la comanda
+            foreach ($i->modificadores ?? [] as $m) {
+                $doc->parrafo('  * ' . $m['opcion'] . ((float) ($m['precio'] ?? 0) > 0 ? ' (+' . $dinero($m['precio']) . ')' : ''));
+            }
+            foreach ($i->textoAjustes() as $ajuste) {
+                $doc->parrafo("  * {$ajuste}");
+            }
+            $doc->columnas("  {$cantidad} x " . $dinero($i->precio_unitario), $dinero($subtotal));
         }
 
         $doc->separador()->negrita()->grande(true, false)->columnas('TOTAL', $dinero($total))->normal()
@@ -314,11 +322,11 @@ class ImpresionService
             ->separador()
             ->alinear('izquierda')
             ->columnas('Impresora', $impresora->alias)
-            ->columnas('Conexión', $impresora->conexion === 'red'
-                ? "{$impresora->ip_impresora}:{$impresora->puerto}"
-                : (string) $impresora->nombre_windows)
+            ->columnas('Conexión', $impresora->conexion === 'windows'
+                ? (string) $impresora->nombre_windows
+                : "{$impresora->ip_impresora}:{$impresora->puerto}" . ($impresora->conexion === 'dispositivo' ? ' (tablet)' : ''))
             ->columnas('Papel', $impresora->ancho_caracteres >= 48 ? '80 mm' : '58 mm')
-            ->columnas('Fecha', now()->format('d/m/Y H:i'))
+            ->columnas('Fecha', now()->format('d-m-Y H:i'))
             ->separador()
             ->linea('Acentos: áéíóú ÁÉÍÓÚ ñÑ ü ¿? ¡!')
             // Regla del ancho exacto del papel: debe caber en una sola línea
@@ -402,7 +410,7 @@ class ImpresionService
             $doc->negrita()->linea('*** ANULADA ***')->normal();
         }
         $doc->linea('Fecha y hora de generación:')
-            ->negrita()->linea($venta->fecha_venta->format('d/m/Y H:i'))->normal()
+            ->negrita()->linea($venta->fecha_venta->format('d-m-Y H:i'))->normal()
             ->alinear('izquierda')
             ->columnas('Emisor', trim($negocio->nombre . ' ' . ($venta->caja?->nombre ?? '')));
 
@@ -473,7 +481,7 @@ class ImpresionService
         }
         if ($venta->cuentaCobrar) {
             // Venta al crédito: el cliente firma el recibo
-            $doc->linea('Crédito: vence el ' . $venta->cuentaCobrar->fecha_vencimiento->format('d/m/Y'))
+            $doc->linea('Crédito: vence el ' . $venta->cuentaCobrar->fecha_vencimiento->format('d-m-Y'))
                 ->avanzar(2)->alinear('centro')
                 ->linea('______________________________')->linea('Firma del cliente')->alinear('izquierda');
         }
@@ -544,7 +552,7 @@ class ImpresionService
         foreach ($datos['extra'] ?? [] as $linea) {
             $doc->parrafo($linea, $ancho);
         }
-        $doc->avanzar()->linea(now()->format('d/m/Y'))
+        $doc->avanzar()->linea(now()->format('d-m-Y'))
             ->alinear('derecha')->linea(now()->format('H:i'))->alinear('izquierda')
             ->normal()->separador('=');
         $alto();
@@ -601,11 +609,11 @@ class ImpresionService
             ->grande(true, false)->linea($turno->estaAbierto() ? 'CORTE PARCIAL' : 'CIERRE DE CAJA')->normal()
             ->linea("{$turno->caja?->nombre} · Turno #{$turno->id}")
             ->alinear('izquierda')->separador()
-            ->columnas('Apertura', $turno->abierto_at->format('d/m/Y H:i'))
+            ->columnas('Apertura', $turno->abierto_at->format('d-m-Y H:i'))
             ->columnas('Abrió', $turno->usuarioApertura?->nombre ?? '');
 
         if ($turno->cerrado_at) {
-            $doc->columnas('Cierre', $turno->cerrado_at->format('d/m/Y H:i'))
+            $doc->columnas('Cierre', $turno->cerrado_at->format('d-m-Y H:i'))
                 ->columnas('Cerró', $turno->usuarioCierre?->nombre ?? '');
         }
 
@@ -673,11 +681,12 @@ class ImpresionService
 
     /**
      * Reparte los productos por área de preparación (la de su categoría) y manda un
-     * ticket por área a su impresora. Todo sale en comanda: lo que no tiene área va
-     * en una comanda general. Sin impresora de comandas se usa $respaldo (la de tickets).
+     * ticket por área a su impresora. Lo que no tiene área se entrega directo y no
+     * imprime comanda, salvo $conGeneral (pedidos especiales: todo es encargo a producción
+     * y sale en una comanda general). Sin impresora de comandas se usa $respaldo (la de tickets).
      * @return TrabajoImpresion[]
      */
-    private static function comandas(array $items, array $datos, string $documentoTipo, int $documentoId, ?int $usuarioId, ?Impresora $respaldo = null): array
+    private static function comandas(array $items, array $datos, string $documentoTipo, int $documentoId, ?int $usuarioId, ?Impresora $respaldo = null, bool $conGeneral = false): array
     {
         $areaPorProducto = Producto::with('categorias.area.impresora')
             ->whereIn('id', collect($items)->pluck('producto_id'))
@@ -686,6 +695,9 @@ class ImpresionService
 
         $trabajos = [];
         foreach (collect($items)->groupBy(fn ($i) => $areaPorProducto[$i['producto_id']]?->id) as $areaId => $delArea) {
+            if (!$areaId && !$conGeneral) {
+                continue; // sin área: se entrega directo, solo lleva el ticket de venta
+            }
             $area = $areaId ? $areaPorProducto[$delArea->first()['producto_id']] : null;
             $impresora = self::impresoraDeArea($area) ?? $respaldo;
             if ($impresora) {
@@ -734,6 +746,17 @@ class ImpresionService
 
     private static function transmitir(TrabajoImpresion $trabajo, Impresora $impresora, string $bytes): void
     {
+        // Servidor en la nube: no llega a la red del local. El trabajo queda en la cola y lo
+        // imprime la tablet que tiene activado «Esta tablet imprime» (ver tomarCola).
+        if ($impresora->conexion === 'dispositivo') {
+            $trabajo->estado = 'pendiente';
+            $trabajo->error = null;
+            $trabajo->save();
+            $trabajo->touch();
+            Cache::forget(self::CLAVE_TOMADO . $trabajo->id);
+            return;
+        }
+
         $trabajo->intentos++;
 
         try {
@@ -751,6 +774,68 @@ class ImpresionService
         }
 
         $trabajo->save();
+    }
+
+    // ── Cola para la tablet (impresoras con conexión «dispositivo») ──
+
+    private const CLAVE_TOMADO = 'impresion:tomado:';
+    /** Lo que lleva más tiempo en la cola ya no se imprime solo: se reintenta a mano. */
+    public const VIGENCIA_COLA_MINUTOS = 30;
+    /** Si la tablet no responde en este tiempo, otra puede tomar el trabajo. */
+    private const SEGUNDOS_TOMADO = 45;
+
+    /**
+     * La tablet pide lo que tiene que imprimir: trabajos pendientes de impresoras
+     * «dispositivo», con los bytes listos para mandar al puerto de la impresora
+     * (las Star ya convertidas a imagen). Cada trabajo queda apartado unos
+     * segundos para que dos tablets no impriman lo mismo.
+     */
+    public static function tomarCola(string $dispositivo, int $limite = 10): Collection
+    {
+        return Cache::lock('impresion:cola', 10)->block(5, function () use ($dispositivo, $limite) {
+            $trabajos = TrabajoImpresion::with('impresora')
+                ->where('estado', 'pendiente')
+                ->where('updated_at', '>=', now()->subMinutes(self::VIGENCIA_COLA_MINUTOS))
+                ->whereHas('impresora', fn ($q) => $q->where('conexion', 'dispositivo')->where('activo', true))
+                ->orderBy('id')->limit(50)->get()
+                ->reject(fn (TrabajoImpresion $t) => Cache::has(self::CLAVE_TOMADO . $t->id))
+                ->take($limite)
+                ->values();
+
+            return $trabajos->map(function (TrabajoImpresion $t) use ($dispositivo) {
+                Cache::put(self::CLAVE_TOMADO . $t->id, $dispositivo, self::SEGUNDOS_TOMADO);
+                $impresora = $t->impresora;
+                $bytes = base64_decode($t->contenido);
+                if ($impresora->tipo_impresion === 'star_raster') {
+                    $bytes = StarRaster::desdeEscPos($bytes, $impresora->ancho_caracteres);
+                }
+
+                return [
+                    'id'        => $t->id,
+                    'tipo'      => $t->tipo,
+                    'impresora' => $impresora->alias,
+                    'ip'        => $impresora->ip_impresora,
+                    'puerto'    => (int) ($impresora->puerto ?: 9100),
+                    'bytes'     => base64_encode($bytes),
+                ];
+            });
+        });
+    }
+
+    /** La tablet avisa si la impresora recibió el trabajo. */
+    public static function resultadoDispositivo(TrabajoImpresion $trabajo, bool $ok, ?string $error): TrabajoImpresion
+    {
+        if ($trabajo->estado === 'impreso') {
+            return $trabajo; // otra tablet ya lo imprimió
+        }
+        $trabajo->intentos++;
+        $trabajo->estado = $ok ? 'impreso' : 'error';
+        $trabajo->error = $ok ? null : mb_substr($error ?: 'La tablet no pudo imprimir', 0, 500);
+        $trabajo->impreso_at = $ok ? now() : null;
+        $trabajo->save();
+        Cache::forget(self::CLAVE_TOMADO . $trabajo->id);
+
+        return $trabajo;
     }
 
     private static function transporte(Impresora $impresora): Transporte

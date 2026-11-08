@@ -25,6 +25,7 @@ class ReportesService
         'ventas_diarias'        => ['titulo' => 'Ventas por día', 'grupo' => 'Ventas', 'fechas' => true],
         'ventas_hora'           => ['titulo' => 'Ventas por hora', 'grupo' => 'Ventas', 'fechas' => true],
         'ventas_empleado'       => ['titulo' => 'Ventas por empleado', 'grupo' => 'Ventas', 'fechas' => true],
+        'productos_agregados'   => ['titulo' => 'Quién agregó cada producto', 'grupo' => 'Ventas', 'fechas' => true],
         'ventas_metodo'         => ['titulo' => 'Ventas por forma de pago', 'grupo' => 'Ventas', 'fechas' => true],
         'productos_vendidos'    => ['titulo' => 'Productos más vendidos', 'grupo' => 'Ventas', 'fechas' => true],
         'resultados'            => ['titulo' => 'Utilidad estimada', 'grupo' => 'Ventas', 'fechas' => true],
@@ -61,8 +62,8 @@ class ReportesService
             'tipo'        => $tipo,
             'titulo'      => self::REPORTES[$tipo]['titulo'],
             'periodo'     => self::REPORTES[$tipo]['fechas']
-                ? ($desde->isSameDay($hasta) ? $desde->format('d/m/Y') : "Del {$desde->format('d/m/Y')} al {$hasta->format('d/m/Y')}")
-                : 'Al ' . now()->format('d/m/Y H:i'),
+                ? ($desde->isSameDay($hasta) ? $desde->format('d-m-Y') : "Del {$desde->format('d-m-Y')} al {$hasta->format('d-m-Y')}")
+                : 'Al ' . now()->format('d-m-Y H:i'),
             'desde'       => $desde->toDateString(),
             'hasta'       => $hasta->toDateString(),
             'totales'     => null,
@@ -106,9 +107,20 @@ class ReportesService
     // ── Ventas ────────────────────────────────────────────────
 
     /**
+     * Solo las ventas con algo cobrable: una venta que es puro consumo interno
+     * (la cena del personal a $0.00) no es un ticket ni cuenta como venta.
+     */
+    private static function conAlgoVendido($query, string $alias = 'ventas')
+    {
+        return $query->whereExists(fn ($e) => $e->from('ventas_detalle as vdc')
+            ->whereColumn('vdc.venta_id', "{$alias}.id")->where('vdc.consumo_interno', false));
+    }
+
+    /**
      * Ventas vigentes y devoluciones por día. Las devoluciones restan su parte
      * sin IVA (en la proporción de su venta) y su costo si el producto volvió
-     * al inventario; lo dañado sigue contando como costo.
+     * al inventario; lo dañado sigue contando como costo. El consumo interno no
+     * es costo de ventas: se informa aparte, al costo.
      */
     private static function ventasPorDia(Carbon $desde, Carbon $hasta): array
     {
@@ -118,6 +130,22 @@ class ReportesService
             ->selectRaw('DATE(fecha_venta) as dia, COUNT(*) as tickets, SUM(total) as total, SUM(descuento_total) as descuentos,
                 SUM(base_imponible) as base, SUM(impuesto) as iva, SUM(costo_total) as costo')
             ->get()->keyBy('dia');
+
+        $soloConsumo = DB::table('ventas')
+            ->where('estado', '!=', 'anulada')->whereBetween('fecha_venta', [$desde, $hasta])
+            ->whereNotExists(fn ($e) => $e->from('ventas_detalle as vdc')
+                ->whereColumn('vdc.venta_id', 'ventas.id')->where('vdc.consumo_interno', false))
+            ->groupBy(DB::raw('DATE(fecha_venta)'))
+            ->selectRaw('DATE(fecha_venta) as dia, COUNT(*) as tickets')
+            ->pluck('tickets', 'dia');
+
+        $consumo = DB::table('ventas_detalle as vd')
+            ->join('ventas as v', 'v.id', '=', 'vd.venta_id')
+            ->where('vd.consumo_interno', true)
+            ->where('v.estado', '!=', 'anulada')->whereBetween('v.fecha_venta', [$desde, $hasta])
+            ->groupBy(DB::raw('DATE(v.fecha_venta)'))
+            ->selectRaw('DATE(v.fecha_venta) as dia, SUM(vd.cantidad * vd.costo_unitario) as costo')
+            ->pluck('costo', 'dia');
 
         $devoluciones = DB::table('devoluciones as d')
             ->join('ventas as v', 'v.id', '=', 'd.venta_id')
@@ -138,15 +166,17 @@ class ReportesService
 
         $dias = collect($ventas->keys())->merge($devoluciones->keys())->unique()->sort()->values();
 
-        return $dias->map(function ($dia) use ($ventas, $devoluciones, $costoDevuelto) {
+        return $dias->map(function ($dia) use ($ventas, $devoluciones, $costoDevuelto, $soloConsumo, $consumo) {
             $v = $ventas->get($dia);
             $d = $devoluciones->get($dia);
             $base = (float) ($v->base ?? 0) - (float) ($d->base ?? 0);
-            $costo = (float) ($v->costo ?? 0) - (float) ($costoDevuelto[$dia] ?? 0);
+            $costoConsumo = (float) ($consumo[$dia] ?? 0);
+            $costo = (float) ($v->costo ?? 0) - $costoConsumo - (float) ($costoDevuelto[$dia] ?? 0);
 
             return [
                 'fecha'        => $dia,
-                'tickets'      => (int) ($v->tickets ?? 0),
+                'tickets'      => (int) ($v->tickets ?? 0) - (int) ($soloConsumo[$dia] ?? 0),
+                'consumo_interno' => round($costoConsumo, 2),
                 'ventas'       => round((float) ($v->total ?? 0), 2),
                 'descuentos'   => round((float) ($v->descuentos ?? 0), 2),
                 'devoluciones' => round((float) ($d->total ?? 0), 2),
@@ -162,7 +192,7 @@ class ReportesService
     private static function ventasDiarias(Carbon $desde, Carbon $hasta): array
     {
         $filas = self::ventasPorDia($desde, $hasta);
-        $totales = self::sumar($filas, ['tickets', 'ventas', 'descuentos', 'devoluciones', 'neto', 'base', 'costo', 'utilidad']);
+        $totales = self::sumar($filas, ['tickets', 'ventas', 'descuentos', 'devoluciones', 'neto', 'base', 'costo', 'utilidad', 'consumo_interno']);
         $totales['margen'] = self::margen($totales['utilidad'], $totales['base']);
 
         return [
@@ -171,7 +201,7 @@ class ReportesService
                 self::col('ventas', 'Ventas', 'dinero'), self::col('descuentos', 'Descuentos', 'dinero'),
                 self::col('devoluciones', 'Devoluciones', 'dinero'), self::col('neto', 'Venta neta', 'dinero'),
                 self::col('costo', 'Costo', 'dinero'), self::col('utilidad', 'Utilidad', 'dinero'),
-                self::col('margen', 'Margen', 'porcentaje'),
+                self::col('margen', 'Margen', 'porcentaje'), self::col('consumo_interno', 'Consumo interno (costo)', 'dinero'),
             ],
             'filas'       => $filas,
             'totales'     => $totales,
@@ -187,7 +217,7 @@ class ReportesService
 
     private static function ventasHora(Carbon $desde, Carbon $hasta): array
     {
-        $filas = DB::table('ventas')
+        $filas = self::conAlgoVendido(DB::table('ventas'))
             ->where('estado', '!=', 'anulada')->whereBetween('fecha_venta', [$desde, $hasta])
             ->groupBy(DB::raw('HOUR(fecha_venta)'))
             ->selectRaw('HOUR(fecha_venta) as hora, COUNT(*) as tickets, SUM(total) as total')
@@ -216,7 +246,7 @@ class ReportesService
 
     private static function ventasEmpleado(Carbon $desde, Carbon $hasta): array
     {
-        $filas = DB::table('ventas as v')
+        $filas = self::conAlgoVendido(DB::table('ventas as v'), 'v')
             ->join('administradores as a', 'a.id', '=', 'v.usuario_id')
             ->whereBetween('v.fecha_venta', [$desde, $hasta])
             ->groupBy('v.usuario_id', 'a.nombre')
@@ -244,6 +274,98 @@ class ReportesService
             'filas'   => $filas,
             'totales' => self::sumar($filas, ['tickets', 'total', 'descuentos', 'anuladas']),
             'grafica' => ['tipo' => 'barra', 'etiqueta' => 'empleado', 'series' => ['total']],
+        ];
+    }
+
+    /**
+     * Quién agregó cada producto: en mesas y pedidos de mostrador cada línea guarda
+     * quién la agregó (aunque otro cobre); en venta rápida es quien hizo la venta.
+     * Filtro opcional usuario_id. Lo cancelado se lista con quién lo canceló y no suma.
+     */
+    private static function productosAgregados(Carbon $desde, Carbon $hasta, array $filtros = []): array
+    {
+        $empleado = !empty($filtros['usuario_id']) ? (int) $filtros['usuario_id'] : null;
+        $estados = ['pendiente' => 'Sin enviar', 'enviado' => 'Enviado', 'en_preparacion' => 'Enviado', 'listo' => 'Enviado',
+            'entregado' => 'Entregado', 'cancelado' => 'Cancelado'];
+
+        // Mesas y pedidos de mostrador
+        $deOrdenes = DB::table('ordenes_items as i')
+            ->join('ordenes as o', 'o.id', '=', 'i.orden_id')
+            ->join('terminales as t', 't.id', '=', 'o.terminal_id')
+            ->join('ordenes_tickets as ot', 'ot.id', '=', 'i.ticket_id')
+            ->join('administradores as a', 'a.id', '=', 'i.usuario_id')
+            ->leftJoin('administradores as ac', 'ac.id', '=', 'i.cancelado_por')
+            ->leftJoin('ventas as v', 'v.id', '=', 'i.venta_id')
+            ->whereBetween('i.created_at', [$desde, $hasta])
+            ->when($empleado, fn ($q) => $q->where('i.usuario_id', $empleado))
+            ->get(['i.created_at', 'i.usuario_id', 'a.nombre as empleado', 't.nombre as terminal', 't.tipo as terminal_tipo',
+                'o.numero as orden', 'ot.nombre as cuenta', 'i.nombre_producto', 'i.modificadores', 'i.ajustes', 'i.cantidad',
+                'i.precio_unitario', 'i.estado', 'i.motivo_cancelacion', 'ac.nombre as cancelo', 'v.numero as venta', 'v.estado as venta_estado'])
+            ->map(function ($r) use ($estados) {
+                $extras = collect(json_decode($r->modificadores ?? '[]', true) ?: [])->pluck('opcion')->filter()->join(', ');
+                $cancelado = $r->estado === 'cancelado';
+                $anulada = $r->venta_estado === 'anulada';
+                return [
+                    'momento'  => $r->created_at,
+                    'usuario_id' => (int) $r->usuario_id,
+                    'fecha'    => Carbon::parse($r->created_at)->format('d-m-Y H:i'),
+                    'empleado' => $r->empleado,
+                    'lugar'    => $r->terminal_tipo === 'caja' ? 'Pedido de mostrador' : $r->terminal,
+                    'cuenta'   => "{$r->orden} · {$r->cuenta}",
+                    'producto' => $r->nombre_producto . ($extras ? " ({$extras})" : ''),
+                    'cantidad' => (float) $r->cantidad,
+                    'importe'  => $cancelado || $anulada ? 0.0 : round((float) $r->cantidad * (float) $r->precio_unitario, 2),
+                    'estado'   => $cancelado ? 'Cancelado' : ($r->venta ? ($anulada ? "Venta {$r->venta} anulada" : "Cobrado en {$r->venta}") : $estados[$r->estado] ?? $r->estado),
+                    'detalle'  => $cancelado ? trim(($r->cancelo ? "Canceló {$r->cancelo}" : 'Cancelado') . ($r->motivo_cancelacion ? ": {$r->motivo_cancelacion}" : '')) : '',
+                ];
+            });
+
+        // Venta rápida: la venta no viene de una mesa ni de un pedido de mostrador
+        $deVentaRapida = DB::table('ventas_detalle as d')
+            ->join('ventas as v', 'v.id', '=', 'd.venta_id')
+            ->join('administradores as a', 'a.id', '=', 'v.usuario_id')
+            ->whereNull('v.orden_id')
+            ->whereBetween('v.fecha_venta', [$desde, $hasta])
+            ->when($empleado, fn ($q) => $q->where('v.usuario_id', $empleado))
+            ->get(['v.fecha_venta', 'v.usuario_id', 'a.nombre as empleado', 'v.numero', 'v.estado', 'd.nombre_producto', 'd.cantidad', 'd.subtotal', 'd.consumo_interno'])
+            ->map(fn ($r) => [
+                'momento'  => $r->fecha_venta,
+                'usuario_id' => (int) $r->usuario_id,
+                'fecha'    => Carbon::parse($r->fecha_venta)->format('d-m-Y H:i'),
+                'empleado' => $r->empleado,
+                'lugar'    => 'Venta rápida',
+                'cuenta'   => $r->numero,
+                'producto' => $r->nombre_producto,
+                'cantidad' => (float) $r->cantidad,
+                'importe'  => $r->estado === 'anulada' ? 0.0 : round((float) $r->subtotal, 2),
+                'estado'   => $r->estado === 'anulada' ? 'Venta anulada' : ($r->consumo_interno ? 'Consumo interno' : 'Cobrado'),
+                'detalle'  => '',
+            ]);
+
+        $todas = $deOrdenes->concat($deVentaRapida)->sortBy('momento')->values();
+
+        // Quién agregó más (sin lo cancelado ni lo anulado)
+        $porEmpleado = $todas->groupBy('empleado')
+            ->map(fn ($g, $nombre) => ['titulo' => $nombre, 'valor' => round($g->sum('importe'), 2), 'formato' => 'dinero'])
+            ->sortByDesc('valor')->values();
+
+        // Para el filtro «Empleado»: quienes agregaron algo en el periodo (sin filtrar)
+        $empleados = $empleado
+            ? DB::table('administradores')->where('id', $empleado)->get(['id', 'nombre'])
+            : $todas->unique('usuario_id')->map(fn ($f) => ['id' => $f['usuario_id'], 'nombre' => $f['empleado']])->sortBy('nombre')->values();
+
+        $filas = $todas->map(fn ($f) => collect($f)->except(['momento', 'usuario_id'])->all())->all();
+
+        return [
+            'columnas' => [
+                self::col('fecha', 'Fecha y hora'), self::col('empleado', 'Agregó'), self::col('lugar', 'Dónde'),
+                self::col('cuenta', 'Cuenta / venta'), self::col('producto', 'Producto'), self::col('cantidad', 'Cantidad', 'numero'),
+                self::col('importe', 'Importe', 'dinero'), self::col('estado', 'Estado'), self::col('detalle', 'Cancelación'),
+            ],
+            'filas'       => $filas,
+            'totales'     => ['cantidad' => round($todas->where('importe', '>', 0)->sum('cantidad'), 4), 'importe' => round($todas->sum('importe'), 2)],
+            'indicadores' => $porEmpleado->take(4)->all(),
+            'empleados'   => $empleados,
         ];
     }
 
@@ -297,6 +419,7 @@ class ReportesService
         $filas = DB::table('ventas_detalle as vd')
             ->join('ventas as v', 'v.id', '=', 'vd.venta_id')
             ->where('v.estado', '!=', 'anulada')->whereBetween('v.fecha_venta', [$desde, $hasta])
+            ->where('vd.consumo_interno', false)
             ->when(!empty($filtros['categoria_id']), fn ($q) => $q->whereExists(fn ($e) => $e->from('categoria_producto as cp')
                 ->whereColumn('cp.producto_id', 'vd.producto_id')->where('cp.categoria_id', $filtros['categoria_id'])))
             ->groupBy('vd.producto_id', 'vd.nombre_producto', 'vd.unidad')
@@ -353,32 +476,34 @@ class ReportesService
             $bruta = (float) ($v['utilidad'] ?? 0);
             $merma = (float) ($mermas[$dia] ?? 0);
             $gasto = (float) ($gastos[$dia] ?? 0);
+            $consumo = (float) ($v['consumo_interno'] ?? 0);
             return [
                 'fecha'           => $dia,
                 'ventas'          => (float) ($v['base'] ?? 0),
                 'costo'           => (float) ($v['costo'] ?? 0),
                 'utilidad_bruta'  => round($bruta, 2),
                 'mermas'          => round($merma, 2),
+                'consumo_interno' => round($consumo, 2),
                 'gastos'          => round($gasto, 2),
-                'resultado'       => round($bruta - $merma - $gasto, 2),
+                'resultado'       => round($bruta - $merma - $consumo - $gasto, 2),
             ];
         })->all();
 
-        $totales = self::sumar($filas, ['ventas', 'costo', 'utilidad_bruta', 'mermas', 'gastos', 'resultado']);
+        $totales = self::sumar($filas, ['ventas', 'costo', 'utilidad_bruta', 'mermas', 'consumo_interno', 'gastos', 'resultado']);
 
         return [
             'columnas' => [
                 self::col('fecha', 'Fecha', 'fecha'), self::col('ventas', 'Ventas sin IVA', 'dinero'),
                 self::col('costo', 'Costo de ventas', 'dinero'), self::col('utilidad_bruta', 'Utilidad bruta', 'dinero'),
-                self::col('mermas', 'Mermas', 'dinero'), self::col('gastos', 'Gastos', 'dinero'),
-                self::col('resultado', 'Resultado', 'dinero'),
+                self::col('mermas', 'Mermas', 'dinero'), self::col('consumo_interno', 'Consumo interno', 'dinero'),
+                self::col('gastos', 'Gastos', 'dinero'), self::col('resultado', 'Resultado', 'dinero'),
             ],
             'filas'       => $filas,
             'totales'     => $totales,
             'indicadores' => [
                 ['titulo' => 'Ventas sin IVA', 'valor' => $totales['ventas'], 'formato' => 'dinero'],
                 ['titulo' => 'Utilidad bruta', 'valor' => $totales['utilidad_bruta'], 'formato' => 'dinero'],
-                ['titulo' => 'Mermas y gastos', 'valor' => round($totales['mermas'] + $totales['gastos'], 2), 'formato' => 'dinero'],
+                ['titulo' => 'Mermas, consumo y gastos', 'valor' => round($totales['mermas'] + $totales['consumo_interno'] + $totales['gastos'], 2), 'formato' => 'dinero'],
                 ['titulo' => 'Resultado', 'valor' => $totales['resultado'], 'formato' => 'dinero'],
             ],
             'grafica' => ['tipo' => 'linea', 'etiqueta' => 'fecha', 'series' => ['utilidad_bruta', 'resultado']],
@@ -402,8 +527,8 @@ class ReportesService
                 'caja'      => $t->caja,
                 'abrio'     => $t->abrio,
                 'cerro'     => $t->cerro,
-                'apertura'  => Carbon::parse($t->abierto_at)->format('d/m/Y H:i'),
-                'cierre'    => Carbon::parse($t->cerrado_at)->format('d/m/Y H:i'),
+                'apertura'  => Carbon::parse($t->abierto_at)->format('d-m-Y H:i'),
+                'cierre'    => Carbon::parse($t->cerrado_at)->format('d-m-Y H:i'),
                 'fondo'     => (float) $t->fondo_inicial,
                 'ventas'    => (float) $t->total_ventas,
                 'ingresos'  => (float) $t->total_ingresos,
@@ -584,7 +709,7 @@ class ReportesService
                 $entra = (float) $m->stock_resultante >= (float) $m->stock_anterior;
                 $diferencia = abs((float) $m->stock_resultante - (float) $m->stock_anterior);
                 return [
-                    'fecha'    => $m->created_at->format('d/m/Y H:i'),
+                    'fecha'    => $m->created_at->format('d-m-Y H:i'),
                     'tipo'     => MovimientoInventario::TIPOS[$m->tipo] ?? $m->tipo,
                     'motivo'   => $m->motivo,
                     'entrada'  => $entra ? round($diferencia, 4) : null,
@@ -761,7 +886,7 @@ class ReportesService
         $fin = Carbon::parse($hasta ?? $hoy)->endOfDay();
         $ayer = $hoy->copy()->subDay();
 
-        $dia = fn (Carbon $d) => DB::table('ventas')->where('estado', '!=', 'anulada')
+        $dia = fn (Carbon $d) => self::conAlgoVendido(DB::table('ventas'))->where('estado', '!=', 'anulada')
             ->whereBetween('fecha_venta', [$d->copy()->startOfDay(), $d->copy()->endOfDay()])
             ->selectRaw('COUNT(*) as tickets, COALESCE(SUM(total), 0) as total')->first();
         $vHoy = $dia($hoy);
@@ -782,6 +907,7 @@ class ReportesService
                 ->orderBy('hora')->get()->map(fn ($r) => ['hora' => (int) $r->hora, 'total' => round((float) $r->total, 2)]),
             'top_productos' => DB::table('ventas_detalle as vd')->join('ventas as v', 'v.id', '=', 'vd.venta_id')
                 ->where('v.estado', '!=', 'anulada')->whereBetween('v.fecha_venta', [$hoy->copy()->startOfDay(), $hoy->copy()->endOfDay()])
+                ->where('vd.consumo_interno', false)
                 ->groupBy('vd.nombre_producto', 'vd.unidad')
                 ->selectRaw('vd.nombre_producto as producto, vd.unidad, SUM(vd.cantidad - vd.cantidad_devuelta) as cantidad, SUM(vd.subtotal) as total')
                 ->orderByDesc('total')->limit(5)->get()
@@ -836,7 +962,8 @@ class ReportesService
 
         $productos = DB::table('ventas_detalle as vd')->join('ventas as v', 'v.id', '=', 'vd.venta_id')
             ->leftJoin('productos as p', 'p.id', '=', 'vd.producto_id')
-            ->where('v.estado', '!=', 'anulada')->whereBetween('v.fecha_venta', [$inicio, $fin]);
+            ->where('v.estado', '!=', 'anulada')->whereBetween('v.fecha_venta', [$inicio, $fin])
+            ->where('vd.consumo_interno', false);
 
         $resumen = [
             'desde'          => $inicio->toDateString(),

@@ -77,6 +77,20 @@ class SeguridadTest extends TestCase
         $this->assertTrue($pos['pos.vender']['asignado']);
         $this->assertFalse($pos['pos.anular']['asignado']);
         $this->assertSame('Anular ventas', $pos['pos.anular']['descripcion']);
+        // La explicación larga para el botón «?»
+        $this->assertStringContainsString('cancelar un producto que ya se envió', $pos['pos.anular']['ayuda']);
+    }
+
+    public function test_cada_permiso_del_catalogo_tiene_su_explicacion(): void
+    {
+        $catalogo = array_keys(config('permisos.permisos'));
+        $ayuda = config('permisos.ayuda');
+
+        $this->assertSame([], array_values(array_diff($catalogo, array_keys($ayuda))), 'Permisos sin explicación');
+        $this->assertSame([], array_values(array_diff(array_keys($ayuda), $catalogo)), 'Explicaciones de permisos que ya no existen');
+        foreach ($ayuda as $permiso => $texto) {
+            $this->assertGreaterThan(60, mb_strlen($texto), "La explicación de {$permiso} es muy corta");
+        }
     }
 
     public function test_guardar_matriz_cambia_lo_que_puede_hacer_el_rol(): void

@@ -93,6 +93,32 @@ class RecetasVentaTest extends TestCase
         return (float) Inventario::where('producto_id', $p->id)->value('stock_actual');
     }
 
+    public function test_el_catalogo_dice_cuantos_platos_alcanzan_con_los_insumos(): void
+    {
+        $this->actuarComo('admin');
+        // 4 limones y 30 g de azúcar: con 30 limones alcanzan 7 (el azúcar daría para 166)
+        $this->receta($this->limonada, [[$this->limon, 'Unidad', 4], [$this->azucar, 'Gramo', 30]])->assertCreated();
+
+        $alcanza = fn (string $ruta) => collect($this->getJson($ruta)->assertOk()->json('productos'))->firstWhere('id', $this->limonada->id)['alcanza'];
+        $this->assertEquals(7, $alcanza('/api/pos/catalogo'));
+        $this->assertEquals(7, $alcanza('/api/mesas/catalogo'));
+
+        // 2 limonadas en una mesa abierta apartan 8 limones: quedan 22, alcanzan 5
+        $this->seed(\Database\Seeders\CajaSeeder::class);
+        $mesa = \App\Models\Terminal::where('nombre', 'MESA 1')->first();
+        $this->turno->update(['usuario_apertura_id' => auth('sanctum')->id()]);
+        $orden = $this->postJson("/api/mesas/terminales/{$mesa->id}/abrir", [])->assertOk()->json('orden.id');
+        $this->postJson("/api/mesas/ordenes/{$orden}/items", ['items' => [['producto_id' => $this->limonada->id, 'cantidad' => 2]]])->assertOk();
+        $this->assertEquals(5, $alcanza('/api/mesas/catalogo'));
+        $this->assertEquals(5, $alcanza('/api/pos/catalogo'));
+
+        // Sin limones no alcanza ninguna; un plato sin receta no dice nada
+        Inventario::where('producto_id', $this->limon->id)->update(['stock_actual' => 3]);
+        $this->assertEquals(0, $alcanza('/api/pos/catalogo'));
+        $otro = $this->plato('Agua', 0.50);
+        $this->assertNull(collect($this->getJson('/api/pos/catalogo')->json('productos'))->firstWhere('id', $otro->id)['alcanza']);
+    }
+
     public function test_vender_con_receta_descuenta_los_insumos_y_costea_la_venta(): void
     {
         $this->actuarComo('admin');
@@ -158,6 +184,10 @@ class RecetasVentaTest extends TestCase
             }
         };
         $this->app->instance(\App\Support\Impresion\TransporteRed::class, $transporte);
+        // El desayuno se prepara en Cocina (sin área se entregaría directo y no saldría comanda)
+        $desayunos = \App\Models\Categoria::create(['nombre' => 'Desayunos', 'estado' => true,
+            'area_preparacion_id' => \App\Models\AreaPreparacion::where('nombre', 'Cocina')->value('id')]);
+        $desayuno->categorias()->attach($desayunos->id);
         \App\Models\Impresora::create(['alias' => 'Caja', 'conexion' => 'red', 'ip_impresora' => '192.168.1.50', 'puerto' => 9100,
             'tipo_impresion' => 'escpos', 'ancho_caracteres' => 48, 'uso' => 'ambos', 'activo' => true, 'predeterminada' => true]);
         $this->postJson('/api/impresion/ventas/' . $venta->json('venta.id'), ['comandas' => true])->assertOk();
@@ -250,6 +280,11 @@ class RecetasVentaTest extends TestCase
 
         $this->receta($this->limonada, [[$hielo, 'Unidad', 1]])->assertStatus(422)
             ->assertJsonPath('message', 'Hielo no lleva inventario: no se puede descontar al vender Limonada');
+
+        // Tampoco en una receta de producción (el producto sí lleva inventario)
+        $galleta = $this->plato('Galleta', 0.50, ['controla_stock' => true]);
+        $this->receta($galleta, [[$hielo, 'Unidad', 1]], 10)->assertStatus(422)
+            ->assertJsonPath('message', 'Hielo no lleva inventario: no se puede descontar al producir Galleta');
     }
 
     public function test_consumo_interno_no_cobra_y_solo_descuenta_inventario(): void

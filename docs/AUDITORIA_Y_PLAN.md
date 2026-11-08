@@ -248,7 +248,7 @@ Frontend:
 
 ## 6. Preguntas abiertas para el negocio
 
-1. **Dónde corre el servidor.** Hoy la API apunta a `192.168.1.4:8080` (Laragon en la red local). Si el servidor está dentro de la panadería, perder internet no detiene el POS; el modo offline cubre la caída del servidor o del Wi-Fi. Si se va a alojar en la nube, el offline pasa a ser crítico. El diseño sirve para ambos casos, pero cambia las prioridades.
+1. **Dónde corre el servidor.** *(Resuelto 2026-11-06: VPS de Hostinger; la tablet imprime. Ver [DESPLIEGUE.md](DESPLIEGUE.md).)* Hoy la API apunta a `192.168.1.4:8080` (Laragon en la red local). Si el servidor está dentro de la panadería, perder internet no detiene el POS; el modo offline cubre la caída del servidor o del Wi-Fi. Si se va a alojar en la nube, el offline pasa a ser crítico. El diseño sirve para ambos casos, pero cambia las prioridades.
 2. **Facturación electrónica (DTE del Ministerio de Hacienda de El Salvador).** ¿Se necesita emitir DTE o basta con el ticket interno? Si se necesita, conviene agregar un módulo aparte antes de salir a producción.
 3. **IVA.** ¿Los precios de venta ya incluyen el 13 %? (Propuesta: sí, y el ticket desglosa el impuesto.)
 4. **Stock negativo.** ¿Se permite vender pan que todavía no se registró como producido? (Propuesta: permitir con alerta, configurable.)

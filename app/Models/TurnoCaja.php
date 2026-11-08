@@ -90,7 +90,7 @@ class TurnoCaja extends Model
         if (!$id) {
             return null;
         }
-        $fecha = fn ($f) => \Illuminate\Support\Carbon::parse($f)->format('d/m H:i');
+        $fecha = fn ($f) => \Illuminate\Support\Carbon::parse($f)->format('d-m H:i');
 
         return "#{$id} · abrió {$abrio} {$fecha($abierto)}" . ($cerrado ? " · cerró {$cerro} {$fecha($cerrado)}" : ' · abierto');
     }

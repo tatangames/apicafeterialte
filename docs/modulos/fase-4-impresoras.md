@@ -123,7 +123,7 @@ CANT    DESCRIPCIÓN
            ORIGINAL            (COPIA al reimprimir)
 ```
 
-- Lleva el área en grande debajo de «Solicitud de producción» («** COCINA **», «** BARRA **»; desde 2026-11-06), porque Cocina y Barra pueden imprimir en la misma impresora. Cada área sale en su propio ticket; lo que no tiene área sale en una comanda general sin ese encabezado. No lleva mesero ni personas.
+- Lleva el área en grande debajo de «Solicitud de producción» («** COCINA **», «** BARRA **»; desde 2026-11-06), porque Cocina y Barra pueden imprimir en la misma impresora. Cada área sale en su propio ticket; lo que no tiene área no imprime comanda en ventas y mesas (desde 2026-11-07; solo los pedidos especiales la sacan en una comanda general sin ese encabezado). No lleva mesero ni personas.
 - Los extras, lo que no lleva y la nota del producto salen uno por renglón con `*`. La nota de la comanda, si hay, sale debajo de la mesa.
 - En mostrador, en lugar de «Mesa:» va el nombre de la caja, y el nombre del cliente («Juan») en el lugar de «Ticket 1».
 - El aviso de cancelación usa el mismo formato con «** CANCELADO **» arriba, mesero, autorizó y motivo, y «CANCELADO» al final.
@@ -131,3 +131,21 @@ CANT    DESCRIPCIÓN
 - Botón «Prueba producción» en Impresoras (web y tablet), `POST /admin/impresora/{id}/test-produccion`: imprime una comanda de ejemplo con el mismo `comanda()`.
 - Web sin térmica o con error: `utils/imprimirComandas.ts` imprime desde el navegador con el mismo formato; `formatoComanda` manda `terminal_tipo` y `cuenta` para eso. La tablet no tiene impresión propia: todo sale por la API.
 - `comanda()` recibe `$datos` (numero, lugar, cuenta, extra, marca, cancelado).
+
+## Impresión desde la tablet, para el servidor en la nube (2026-11-06)
+
+El servidor va en un VPS, así que ya no llega a las impresoras de la red del local. La guía completa está en [DESPLIEGUE.md](../DESPLIEGUE.md), paso 7.
+
+- **Conexión nueva `dispositivo` («Desde la tablet (Wi-Fi)»)** en `impresoras.conexion`. Pide IP y puerto, igual que la de red. Es la opción por defecto en las impresoras nuevas (web y tablet).
+- **Servidor:** `ImpresionService::transmitir` no envía los trabajos de esas impresoras. Los deja `pendiente` en `trabajos_impresion`, y reintentar los regresa a la cola.
+- **API:**
+  - `POST /impresion/cola/tomar {dispositivo}` devuelve hasta 10 trabajos con `ip`, `puerto` y `bytes` (base64, las Star ya convertidas a imagen). Cada uno queda apartado 45 s para que otra tablet no lo imprima, y lo que lleva más de 30 min en cola ya no se entrega.
+  - `POST /impresion/trabajos/{id}/resultado {ok, error?}` marca el trabajo `impreso` o `error`.
+  - Las dos rutas piden `pos.vender|pos.precuentas`.
+- **Respuestas:** las de impresión agregan `en_cola`, y las pruebas de impresión responden «Enviado a la tablet que imprime».
+- **Tablet:**
+  - Módulo nativo local `appcafeteria/modules/impresora-tcp` (Kotlin, solo Android): `enviar(host, puerto, base64, tiempoMs)`. Funciona en el APK (`eas build --profile preview`), no en Expo Go.
+  - `src/lib/impresionLocal.ts` toma la cola cada 3 s y 300 ms después de cada POST.
+  - En Ajustes → Impresoras está el interruptor «Esta tablet imprime», apagado por defecto.
+- **Corrección:** el formulario de impresoras de la tablet no mandaba `tipo_impresion`, así que guardar la Star desde la tablet la regresaba a `escpos`. Ahora tiene «Tipo de impresora».
+- Pruebas: `tests/Feature/ImpresionColaTest.php`.

@@ -109,3 +109,12 @@ La revisión de los archivos encontró dos detalles, ya corregidos:
 - **Gráficas en archivos:** no se incluyen en Excel ni en PDF.
 - **Periodo:** máximo un año por consulta.
 - **DTE:** el libro de compras sirve de apoyo para la declaración de IVA, pero no es el libro oficial de facturación electrónica (DTE). Eso queda pendiente de la decisión sobre facturación electrónica de la auditoría.
+
+## Consumo interno aparte y simulación de un día (2026-11-06)
+
+`tests/Feature/DiaCompletoTest.php` recorre un día entero por la API, como la tablet: apertura, venta rápida con cambio, pastel con tarjeta (anulado después con PIN), pedido de mostrador, mesa con comandas por área, cancelación parcial con PIN, cuentas separadas, cobro mixto, descuento autorizado, mesa con comanda anulada y liberada, devolución, cena del personal, gasto desde caja y cierre con faltante. Al final cruza el cierre de caja, los reportes y el inventario (existencias y último saldo del kárdex de cada producto). Todo cuadró salvo un punto, que se corrigió:
+
+- **El consumo interno se contaba como venta en los reportes.** La cena del personal ($0.00) sumaba su costo al costo de ventas, contaba como ticket (bajaba el ticket promedio) y salía en «Productos más vendidos». Ahora:
+  - **Ventas por día:** el costo y la utilidad son solo de lo vendido; la nueva columna «Consumo interno (costo)» lo muestra aparte; una venta que es puro consumo interno no cuenta como ticket.
+  - **Utilidad estimada:** nueva columna «Consumo interno», que resta del resultado igual que las mermas y los gastos.
+  - **Ventas por hora, Ventas por empleado, Productos más vendidos y panel de inicio:** no cuentan el consumo interno.

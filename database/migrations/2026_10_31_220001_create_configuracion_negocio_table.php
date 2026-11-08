@@ -31,6 +31,7 @@ return new class extends Migration
             // Porcentaje máximo de descuento que el cajero puede aplicar sin autorización
             $table->decimal('descuento_max_sin_autorizacion', 5, 2)->default(0);
             $table->boolean('cierre_ciego')->default(false); // el cajero cuenta sin ver cuánto debería haber
+            $table->boolean('aviso_cambio')->default(true);  // al cobrar, avisa si el cambio no alcanza en la gaveta
             $table->string('mensaje_ticket', 500)->nullable();
             $table->timestamps();
         });

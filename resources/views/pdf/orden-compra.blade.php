@@ -37,8 +37,8 @@
         <td style="text-align: right;">
             <h1>Orden de compra</h1>
             <div style="font-size: 13px;"><strong>{{ $orden->numero }}</strong></div>
-            <div>Fecha: {{ $orden->fecha->format('d/m/Y') }}</div>
-            @if($orden->fecha_esperada)<div>Entrega esperada: {{ $orden->fecha_esperada->format('d/m/Y') }}</div>@endif
+            <div>Fecha: {{ $orden->fecha->format('d-m-Y') }}</div>
+            @if($orden->fecha_esperada)<div>Entrega esperada: {{ $orden->fecha_esperada->format('d-m-Y') }}</div>@endif
         </td>
     </tr>
 </table>

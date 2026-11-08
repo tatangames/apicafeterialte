@@ -181,7 +181,7 @@ class MesaApiController extends Controller
     // GET /mesas/catalogo: productos a la venta con sus grupos de modificadores
     public function catalogo()
     {
-        $productos = Producto::with(['categorias:id,nombre', 'gruposModificadores:id', 'inventario:producto_id,stock_actual'])
+        $productos = Producto::with(['categorias:id,nombre', 'gruposModificadores:id', 'inventario:producto_id,stock_actual,stock_minimo', 'unidadMedida:id,abreviatura'])
             ->where('activo', true)->where('se_vende', true)->orderBy('orden_pos')->orderBy('nombre')->get();
 
         // Lo que lleva cada plato con receta de venta: el mesero puede quitar o aumentar sin cambiar el precio
@@ -193,6 +193,8 @@ class MesaApiController extends Controller
         // Lo que ya está en otras cuentas abiertas no está disponible para vender
         $apartado = OrdenService::apartado($productos->where('controla_stock', true)->pluck('id')->all());
         $agotadas = self::opcionesAgotadas($grupos);
+        $stockInsumos = ProduccionService::stockDeInsumos($recetas);
+        $apartadoInsumos = $recetas->isEmpty() ? [] : OrdenService::insumosApartados();
 
         return response()->json([
             'success'    => 1,
@@ -206,11 +208,16 @@ class MesaApiController extends Controller
                 'imagen'           => $p->imagen,
                 'color'            => $p->color_pos,
                 'permite_fraccion' => $p->permite_fraccion,
+                'unidad'           => $p->unidadMedida?->abreviatura,
                 'categorias'       => $p->categorias->pluck('id'),
                 'grupos'           => $p->gruposModificadores->pluck('id'),
                 'stock'            => $p->controla_stock ? (float) ($p->inventario?->stock_actual ?? 0) : null,
                 'disponible'       => $p->controla_stock ? round((float) ($p->inventario?->stock_actual ?? 0) - ($apartado->get($p->id) ?? 0), 4) : null,
+                'bajo_minimo'      => $p->controla_stock && \App\Services\InventarioService::enAlerta(
+                    (float) ($p->inventario?->stock_actual ?? 0), (float) ($p->inventario?->stock_minimo ?? 0)),
                 'receta'           => $recetas->has($p->id) ? ProduccionService::ingredientesPorUnidad($recetas->get($p->id)) : [],
+                // Platos con receta: cuántos alcanzan con los insumos, menos lo apartado en otras cuentas
+                'alcanza'          => $recetas->has($p->id) ? ProduccionService::alcanza($recetas->get($p->id), $stockInsumos, $apartadoInsumos) : null,
             ]),
             'categorias' => $productos->flatMap->categorias->unique('id')->sortBy('nombre')->map(fn ($c) => ['id' => $c->id, 'nombre' => $c->nombre])->values(),
             'grupos'     => $grupos->map(fn (GrupoModificador $g) => [
@@ -385,10 +392,11 @@ class MesaApiController extends Controller
     // POST /mesas/ordenes/{orden}/enviar {notas?}: comandas a cocina y barra
     public function enviar(Request $request, Orden $orden)
     {
-        [$datos, $error] = $this->validar($request, ['notas' => 'nullable|string|max:300']);
+        // item_ids: enviar solo esos productos (lo demás sigue sin enviar)
+        [$datos, $error] = $this->validar($request, ['notas' => 'nullable|string|max:300', 'item_ids' => 'nullable|array|min:1', 'item_ids.*' => 'integer']);
         if ($error) return $error;
 
-        $comandas = OrdenService::enviar($orden, $request->user(), $datos['notas'] ?? null);
+        $comandas = OrdenService::enviar($orden, $request->user(), $datos['notas'] ?? null, $datos['item_ids'] ?? null);
 
         // Imprimir nunca frena el envío: si falla, la comanda ya está en la pantalla de cocina
         $trabajos = $comandas->flatMap(fn ($c) => ImpresionService::imprimirComanda($c, $request->user()->id));

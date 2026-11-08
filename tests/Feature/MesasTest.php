@@ -205,7 +205,8 @@ class MesasTest extends TestCase
     {
         $this->actuarComo('cajero');
         $orden = $this->abrir($this->mesa1)['id'];
-        $this->agregar($orden, [['producto_id' => $this->pan->id, 'cantidad' => 1]])->assertOk();
+        // El sándwich pasa por cocina (el pan, sin área, queda entregado al enviar)
+        $this->agregar($orden, [['producto_id' => $this->sandwich->id, 'cantidad' => 1]])->assertOk();
         $item = OrdenItem::where('orden_id', $orden)->value('id');
 
         $this->postJson("/api/mesas/ordenes/{$orden}/entregar", ['item_ids' => [$item]])->assertStatus(422)
@@ -223,6 +224,24 @@ class MesasTest extends TestCase
             'uuid' => (string) Str::uuid(), 'caja_id' => $this->caja->id,
             'pagos' => [['metodo_pago_id' => MetodoPago::where('nombre', 'Efectivo')->value('id'), 'monto' => $monto]],
         ], $extra));
+    }
+
+    public function test_el_catalogo_de_mesas_trae_lo_disponible_y_el_mesero_puede_verlo(): void
+    {
+        Inventario::where('producto_id', $this->pan->id)->update(['stock_minimo' => 100]);
+        $this->actuarComo('mesero');
+        $orden = $this->abrir($this->mesa1)['id'];
+        $this->agregar($orden, [['producto_id' => $this->pan->id, 'cantidad' => 4]])->assertOk();
+
+        $pan = collect($this->getJson('/api/mesas/catalogo')->assertOk()->json('productos'))->firstWhere('id', $this->pan->id);
+        $this->assertEquals(100, $pan['stock']);
+        $this->assertEquals(96, $pan['disponible'], 'Lo que está en otra cuenta abierta no está disponible');
+        $this->assertTrue($pan['bajo_minimo']);
+        $this->assertSame('u', $pan['unidad']);
+        $this->assertNull(collect($this->getJson('/api/mesas/catalogo')->json('productos'))->firstWhere('id', $this->sandwich->id)['disponible']);
+
+        // El permiso para ver la existencia en las tarjetas: el mesero lo trae, el admin lo puede quitar
+        $this->assertTrue(\App\Models\Administrador::role('mesero')->first()->can('pos.ver_existencias'));
     }
 
     // ── Mapa y apertura ───────────────────────────────────────
@@ -291,7 +310,7 @@ class MesasTest extends TestCase
 
     // ── Comandas ──────────────────────────────────────────────
 
-    public function test_enviar_crea_una_comanda_por_area_y_lo_sin_area_va_en_la_general(): void
+    public function test_enviar_crea_una_comanda_por_area_y_lo_sin_area_se_entrega_directo(): void
     {
         $this->actuarComo('cajero');
         $orden = $this->abrir($this->mesa1)['id'];
@@ -302,12 +321,14 @@ class MesasTest extends TestCase
             ->assertJsonPath('impresion.sin_impresora', true);
         $this->assertStringContainsString('enviada a', $res->json('message'));
 
-        // Todo sale en comanda: el pan (sin área) va en la comanda general
+        // Una comanda por área; el pan (sin área) no pasa por cocina: queda entregado sin comanda
         $comandas = Comanda::all();
-        $this->assertCount(3, $comandas);
+        $this->assertCount(2, $comandas);
         $this->assertSame(1, $comandas->pluck('numero')->unique()->count());
-        $this->assertNotNull($comandas->firstWhere('area_id', null));
-        $this->assertSame('enviado', OrdenItem::where('producto_id', $this->pan->id)->value('estado'));
+        $this->assertNull($comandas->firstWhere('area_id', null));
+        $pan = OrdenItem::where('producto_id', $this->pan->id)->first();
+        $this->assertSame('entregado', $pan->estado);
+        $this->assertNull($pan->comanda_id);
         $this->assertSame(0, $res->json('orden.totales.por_enviar'));
 
         $this->postJson("/api/mesas/ordenes/{$orden}/enviar")->assertStatus(422)->assertJsonPath('message', 'No hay productos nuevos para enviar');
@@ -338,12 +359,12 @@ class MesasTest extends TestCase
             ['producto_id' => $this->pan->id, 'cantidad' => 3]]);
 
         $res = $this->postJson("/api/mesas/ordenes/{$orden}/enviar")->assertOk()
-            ->assertJsonPath('impresion.impresas', 3)->assertJsonPath('impresion.sin_impresora', false);
-        $this->assertCount(3, $res->json('comandas'));
+            ->assertJsonPath('impresion.impresas', 2)->assertJsonPath('impresion.sin_impresora', false);
+        $this->assertCount(2, $res->json('comandas'));
 
         $tickets = collect($transporte->enviados)->keyBy(fn ($e) => str_contains($e['texto'], 'Sándwich') ? 'cocina'
             : (str_contains($e['texto'], 'Frappuccino') ? 'barra' : 'general'));
-        $this->assertCount(3, $tickets);
+        $this->assertCount(2, $tickets); // el pan (sin área) se entrega directo: no imprime
         $this->assertStringContainsString('Sándwich', $tickets['cocina']['texto']);
         $this->assertStringContainsString('Sin cebolla', $tickets['cocina']['texto']);
         $this->assertStringNotContainsString('Frappuccino', $tickets['cocina']['texto']);
@@ -351,11 +372,9 @@ class MesasTest extends TestCase
         $this->assertStringContainsString('Frappuccino', $tickets['barra']['texto']);
         $this->assertStringNotContainsString('Sándwich', $tickets['barra']['texto']);
         $this->assertStringNotContainsString('Pan francés', $tickets['cocina']['texto'] . $tickets['barra']['texto']);
-        $this->assertStringContainsString('Solicitud de producción', $tickets['general']['texto']);
-        $this->assertStringContainsString('Mesa: ', $tickets['general']['texto']);
-        $this->assertStringContainsString('Ticket 1', $tickets['general']['texto']);
-        $this->assertStringContainsString('CANT    DESCRIPCIÓN', $tickets['general']['texto']);
-        $this->assertStringContainsString('Pan francés', $tickets['general']['texto']);
+        $this->assertStringContainsString('Mesa: ', $tickets['barra']['texto']);
+        $this->assertStringContainsString('Ticket 1', $tickets['barra']['texto']);
+        $this->assertStringContainsString('CANT    DESCRIPCIÓN', $tickets['barra']['texto']);
         $this->assertStringNotContainsString('Mesero:', $tickets['barra']['texto']); // igual al formato del negocio
 
         // Si el área tiene su impresora, va a esa
@@ -364,7 +383,7 @@ class MesasTest extends TestCase
         $this->agregar($orden, [$this->frappe(['entera'])]);
         $this->postJson("/api/mesas/ordenes/{$orden}/enviar")->assertOk();
         $this->assertSame('Barra', end($transporte->enviados)['impresora']);
-        $this->assertCount(4, $transporte->enviados);
+        $this->assertCount(3, $transporte->enviados);
 
         // Reimprimir desde la mesa devuelve la comanda para el navegador
         $this->postJson('/api/mesas/comandas/' . Comanda::first()->id . '/imprimir')->assertOk()
@@ -393,7 +412,9 @@ class MesasTest extends TestCase
         $this->postJson("/api/mesas/ordenes/{$orden}/precuenta")->assertOk()->assertJsonPath('impreso', true);
         $this->assertStringContainsString('PRECUENTA', $transporte->enviados[0]);
         $this->assertStringContainsString('MESA 1', $transporte->enviados[0]);
-        $this->assertStringContainsString('Frappuccino (Deslactosada, Caramelo)', $transporte->enviados[0]);
+        // Cada extra en su renglón con «*», como en la comanda
+        $this->assertStringContainsString("Frappuccino\n  * Deslactosada (+\$0.25)\n  * Caramelo (+\$0.50)\n", $transporte->enviados[0]);
+        $this->assertStringNotContainsString('Frappuccino (', $transporte->enviados[0]);
         $this->assertStringContainsString('no es comprobante de pago', $transporte->enviados[0]);
     }
 
@@ -595,6 +616,11 @@ class MesasTest extends TestCase
 
         $pan = Categoria::where('nombre', 'Pan')->first();
         $this->putJson('/api/mesas/config/categorias', ['asignaciones' => [['categoria_id' => $pan->id, 'area_id' => AreaPreparacion::where('nombre', 'Cocina')->value('id')]]])->assertOk();
+        // Sin área: se entrega directo (null es válido; la clave tiene que venir)
+        $this->putJson('/api/mesas/config/categorias', ['asignaciones' => [['categoria_id' => $pan->id, 'area_id' => null]]])->assertOk();
+        $this->assertNull($pan->fresh()->area_preparacion_id);
+        $this->putJson('/api/mesas/config/categorias', ['asignaciones' => [['categoria_id' => $pan->id]]])->assertStatus(422);
+        $this->putJson('/api/mesas/config/categorias', ['asignaciones' => [['categoria_id' => $pan->id, 'area_id' => AreaPreparacion::where('nombre', 'Cocina')->value('id')]]])->assertOk();
         $this->assertNotNull($pan->fresh()->area_preparacion_id);
 
         $this->postJson('/api/mesas/config/terminales', ['nombre' => 'TERRAZA 1', 'tipo' => 'mesa', 'zona' => 'Terraza', 'capacidad' => 6])->assertCreated();
@@ -620,6 +646,65 @@ class MesasTest extends TestCase
             'tipo_impresion' => 'escpos', 'ancho_caracteres' => 48, 'uso' => 'ambos', 'activo' => true, 'predeterminada' => true]);
 
         return $transporte;
+    }
+
+    public function test_enviar_solo_los_seleccionados_deja_lo_demas_sin_enviar(): void
+    {
+        $this->actuarComo('cajero');
+        $orden = $this->abrir($this->mesa1)['id'];
+        $this->agregar($orden, [$this->frappe(), ['producto_id' => $this->sandwich->id, 'cantidad' => 1]]);
+        $frappe = OrdenItem::where('producto_id', $this->frappe->id)->value('id');
+        $sandwich = OrdenItem::where('producto_id', $this->sandwich->id)->value('id');
+
+        // Solo el frappe: sale la comanda de Barra y el sándwich sigue sin enviar
+        $res = $this->postJson("/api/mesas/ordenes/{$orden}/enviar", ['item_ids' => [$frappe]])->assertOk();
+        $this->assertCount(1, $res->json('comandas'));
+        $this->assertSame('enviado', OrdenItem::find($frappe)->estado);
+        $this->assertSame('pendiente', OrdenItem::find($sandwich)->estado);
+        $this->assertSame(1, $res->json('orden.totales.por_enviar'));
+
+        // Lo ya enviado no se vuelve a enviar
+        $this->postJson("/api/mesas/ordenes/{$orden}/enviar", ['item_ids' => [$frappe]])->assertStatus(422)
+            ->assertJsonPath('message', 'Ninguno de los seleccionados está sin enviar');
+
+        // Después, «Enviar» manda lo que faltaba con otro número de comanda
+        $this->postJson("/api/mesas/ordenes/{$orden}/enviar")->assertOk();
+        $this->assertSame('enviado', OrdenItem::find($sandwich)->estado);
+        $this->assertSame(2, Comanda::distinct()->count('numero'));
+    }
+
+    public function test_queda_quien_agrego_cada_producto_aunque_cobre_otro(): void
+    {
+        // Mesero 1 abre la mesa y pide el sándwich; mesero 2 agrega la coca (pan); cobra el cajero
+        $mesero1 = $this->actuarComo('mesero', ['nombre' => 'Rosa']);
+        $orden = $this->abrir($this->mesa1)['id'];
+        $this->agregar($orden, [['producto_id' => $this->sandwich->id, 'cantidad' => 1]])->assertOk();
+        $mesero2 = $this->actuarComo('mesero', ['nombre' => 'Luis']);
+        $res = $this->agregar($orden, [['producto_id' => $this->pan->id, 'cantidad' => 2]])->assertOk();
+
+        // En la mesa cada línea dice quién la agregó
+        $items = collect($res->json('orden.tickets.0.items'))->keyBy('nombre');
+        $this->assertSame('Rosa', $items['Sándwich']['usuario']);
+        $this->assertSame('Luis', $items['Pan francés']['usuario']);
+
+        $this->actuarComo('cajero', ['nombre' => 'Caja']);
+        $this->cobrar($orden, [], 20)->assertCreated();
+
+        // Venta rápida: la hace (y la agrega) el mismo cajero
+        $this->actuarComo('admin');
+        $porProducto = collect($this->getJson('/api/reportes/productos_agregados')->assertOk()->json('reporte.filas'))->keyBy('producto');
+        $this->assertSame('Rosa', $porProducto['Sándwich']['empleado']);
+        $this->assertSame('Luis', $porProducto['Pan francés']['empleado']);
+        $this->assertSame('MESA 1', $porProducto['Sándwich']['lugar']);
+        $this->assertStringStartsWith('Cobrado en ', $porProducto['Pan francés']['estado']);
+        $this->assertEquals(0.30, $porProducto['Pan francés']['importe']);
+
+        // Filtro por empleado y lista de empleados para el filtro
+        $reporte = $this->getJson('/api/reportes/productos_agregados')->json('reporte');
+        $this->assertEqualsCanonicalizing(['Luis', 'Rosa'], collect($reporte['empleados'])->pluck('nombre')->all());
+        $this->getJson("/api/reportes/productos_agregados?usuario_id={$mesero2->id}")
+            ->assertJsonCount(1, 'reporte.filas')->assertJsonPath('reporte.filas.0.empleado', 'Luis');
+        $this->assertNotNull($mesero1->id);
     }
 
     public function test_cancelar_parte_de_un_producto_enviado_con_el_pin_del_administrador(): void

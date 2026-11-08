@@ -52,6 +52,10 @@ return [
 
     'expiration' => null,
 
+    // Horas de vida de la sesión web (token con expires_at). La tableta de meseros no vence.
+    // 0 = sin vencimiento.
+    'horas_sesion_web' => (int) env('SESION_WEB_HORAS', 16),
+
     /*
     |--------------------------------------------------------------------------
     | Token Prefix

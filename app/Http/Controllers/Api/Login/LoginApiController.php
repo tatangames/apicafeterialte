@@ -46,7 +46,10 @@ class LoginApiController extends Controller
 
         // Login exitoso - continúa con el token
         $deviceName = $request->device_name ?? 'default';
-        $token = $user->createToken($deviceName)->plainTextToken;
+        // La tableta de meseros nunca vence (es la herramienta del día); el resto (web) vence a las N horas
+        $horas = (int) config('sanctum.horas_sesion_web', 12);
+        $vence = $deviceName === 'tablet-meseros' || $horas <= 0 ? null : now()->addHours($horas);
+        $token = $user->createToken($deviceName, ['*'], $vence)->plainTextToken;
 
         $user->forceFill(['ultimo_acceso' => now()])->save();
 
@@ -170,7 +173,7 @@ class LoginApiController extends Controller
 
         // Verificar si el token ha expirado (60 minutos por defecto)
         $expiresAt = Carbon::parse($resetRecord->created_at)
-            ->addMinutes(config('auth.passwords.users.expire', 60));
+            ->addMinutes(config('auth.passwords.administradores.expire', 60));
 
         if (Carbon::now()->isAfter($expiresAt)) {
             return response()->json([
@@ -223,7 +226,7 @@ class LoginApiController extends Controller
 
         // Verificar si el token ha expirado
         $expiresAt = Carbon::parse($resetRecord->created_at)
-            ->addMinutes(config('auth.passwords.users.expire', 60));
+            ->addMinutes(config('auth.passwords.administradores.expire', 60));
 
         if (Carbon::now()->isAfter($expiresAt)) {
             return response()->json([

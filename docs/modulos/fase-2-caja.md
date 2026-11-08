@@ -135,3 +135,18 @@ En el frontend, `npm run build` compila sin errores. En el navegador se probó e
 - **Impresión térmica:** la impresión directa a la impresora y la apertura del cajón llegan en la Fase 4. Hoy se imprime desde el navegador.
 - **Offline:** bloquear el cierre mientras el dispositivo tenga ventas sin sincronizar se hará en la Fase 5.
 - **Datos de prueba:** quedó en `posdb` el turno #1 de la prueba (cerrado, con su egreso y su arqueo).
+
+## Abrir el cajón sin venta y ventana de cambio en la tablet (2026-11-06)
+
+- **Al cobrar:** el cajón se abre solo, con el ticket de la venta, cuando hubo un pago con un método que «mueve la gaveta» (hoy, solo Efectivo). Con tarjeta, transferencia, crédito, reimpresiones o consumo interno no se abre. El sistema no sabe cuándo se cierra el cajón: no tiene sensor.
+- **Abrir cajón sin venta:** `POST /impresion/cajon {caja_id, motivo}`.
+  - **Permiso:** el nuevo `caja.abrir_cajon`. Quien no lo tiene recibe 403 SIN_PERMISO; la tablet y la web piden el PIN del administrador y repiten la petición.
+  - **Turno:** exige un turno abierto en esa caja.
+  - **Registro:** queda en auditoría (`caja/abrir_cajon`) con el motivo, quién lo abrió, quién autorizó y el turno.
+  - **Rol mesero:** no trae el permiso de entrada (abre con PIN); se le da en Roles y permisos.
+  - **Tablet:** botón «Abrir cajón» en Caja y turno, con su ventana de motivo.
+- **Venta cobrada (tablet):** `components/ventaCobrada.tsx`.
+  - Después de cobrar en Venta rápida, en una mesa o en un pedido de mostrador, muestra el cambio en grande, el total y lo que pagó el cliente (efectivo recibido, tarjeta…).
+  - Solo se cierra con «Listo»: un toque fuera no la cierra. También tiene «Imprimir otra vez».
+  - Si la mesa quedó libre, vuelve al mapa al tocar «Listo».
+  - La web ya tenía su ventana «Venta realizada», que también se cierra a mano.

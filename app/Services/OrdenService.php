@@ -532,28 +532,35 @@ class OrdenService
     // ── Envío a cocina y barra ────────────────────────────────
 
     /**
-     * Envía lo pendiente: una comanda por área con el mismo número. Todo sale en
-     * comanda: lo que no tiene área va en una comanda general.
+     * Envía lo pendiente: una comanda por área con el mismo número. Lo que no tiene
+     * área (pan de vitrina, bebidas embotelladas) no pasa por cocina: queda entregado
+     * sin comanda.
      * @return Collection<Comanda>
      */
-    public static function enviar(Orden $orden, Administrador $usuario, ?string $notas = null): Collection
+    public static function enviar(Orden $orden, Administrador $usuario, ?string $notas = null, ?array $itemIds = null): Collection
     {
-        return DB::transaction(function () use ($orden, $usuario, $notas) {
+        return DB::transaction(function () use ($orden, $usuario, $notas, $itemIds) {
             $orden = self::bloquear($orden);
-            $pendientes = OrdenItem::where('orden_id', $orden->id)->where('estado', 'pendiente')->lockForUpdate()->get();
+            // Con $itemIds solo se envían esos (la coca ya, el café después); sin ellos, todo lo pendiente
+            $pendientes = OrdenItem::where('orden_id', $orden->id)->where('estado', 'pendiente')
+                ->when($itemIds !== null, fn ($q) => $q->whereIn('id', $itemIds))->lockForUpdate()->get();
 
             if ($pendientes->isEmpty()) {
-                throw new NegocioException('No hay productos nuevos para enviar');
+                throw new NegocioException($itemIds !== null ? 'Ninguno de los seleccionados está sin enviar' : 'No hay productos nuevos para enviar');
             }
 
             $numero = null;
             $comandas = collect();
             foreach ($pendientes->groupBy('area_id') as $areaId => $items) {
+                if (!$areaId) {
+                    OrdenItem::whereIn('id', $items->pluck('id'))->update(['estado' => 'entregado']);
+                    continue;
+                }
                 $numero ??= CorrelativoService::siguiente('comanda');
                 $comanda = Comanda::create([
                     'numero'     => $numero,
                     'orden_id'   => $orden->id,
-                    'area_id'    => $areaId ? (int) $areaId : null,
+                    'area_id'    => (int) $areaId,
                     'estado'     => 'pendiente',
                     'notas'      => $notas,
                     'usuario_id' => $usuario->id,

@@ -76,3 +76,10 @@ Cualquier ruta nueva sin permiso hace fallar la prueba.
 - **Un rol por usuario:** cada usuario tiene un solo rol (así estaba el sistema); no hay permisos sueltos por usuario.
 - **Retención de la auditoría:** no hay depuración automática; la tabla crece sin límite. Conviene archivarla cada año.
 - **Sesiones abiertas:** un cambio de permisos se aplica en el servidor de inmediato, pero el menú del usuario conectado se actualiza al recargar la página.
+
+## Explicación de cada permiso (2026-11-06)
+
+- `config/permisos.php` tiene una sección nueva, `ayuda`, con la explicación larga de cada permiso: qué deja hacer, dónde (web o tablet), qué otros permisos usa y qué pasa sin él (por ejemplo, si se pide el PIN del administrador).
+- `GET /admin/roles/{id}/matriz` manda `ayuda` en cada permiso.
+- **Roles y permisos (web) y Ajustes → Usuarios (tablet):** cada permiso tiene un botón «?» que despliega la explicación debajo. En la web, el buscador también busca en ese texto.
+- `SeguridadTest::test_cada_permiso_del_catalogo_tiene_su_explicacion` falla si se agrega un permiso al catálogo sin su explicación.

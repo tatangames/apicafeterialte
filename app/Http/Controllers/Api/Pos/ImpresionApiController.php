@@ -9,6 +9,7 @@ use App\Models\TrabajoImpresion;
 use App\Models\TurnoCaja;
 use App\Models\Venta;
 use App\Services\AuditoriaService;
+use App\Services\AutorizacionService;
 use App\Services\ImpresionService;
 use Illuminate\Http\Request;
 
@@ -40,7 +41,9 @@ class ImpresionApiController extends Controller
         return response()->json([
             'success'  => 1,
             'impreso'  => $errores->isEmpty(),
-            'message'  => $errores->isEmpty() ? 'Impreso' : $errores->pluck('error')->implode(' · '),
+            'en_cola'  => collect($trabajos)->where('estado', 'pendiente')->count(),
+            'message'  => $errores->isNotEmpty() ? $errores->pluck('error')->implode(' · ')
+                : (collect($trabajos)->contains('estado', 'pendiente') ? 'Enviado a la tablet que imprime' : 'Impreso'),
             'trabajos' => collect($trabajos)->map(fn ($t) => $this->formatoTrabajo($t->load('impresora'))),
         ]);
     }
@@ -83,10 +86,22 @@ class ImpresionApiController extends Controller
         $request->validate(['caja_id' => 'required|integer|exists:cajas,id', 'motivo' => 'required|string|max:200'], [
             'motivo.required' => 'Indica por qué se abre el cajón',
         ]);
+        $usuario = $request->user();
+        $turno = TurnoCaja::where('caja_id', $request->integer('caja_id'))->where('estado', 'abierto')->first();
+        if (!$turno) {
+            return response()->json(['success' => false, 'message' => 'Abre el turno de esta caja antes de abrir el cajón'], 422);
+        }
+        // Sin el permiso, el mesero escribe el PIN del administrador (queda quién autorizó)
+        $autorizo = AutorizacionService::autorizar($usuario, 'caja.abrir_cajon', 'Abrir el cajón sin una venta necesita autorización');
 
-        $trabajo = ImpresionService::abrirCajon($request->integer('caja_id'), $request->user()->id);
+        $trabajo = ImpresionService::abrirCajon($request->integer('caja_id'), $usuario->id);
 
-        AuditoriaService::registrar('caja', 'abrir_cajon', $trabajo, null, ['caja_id' => $request->caja_id], $request->motivo);
+        AuditoriaService::registrar('caja', 'abrir_cajon', $trabajo, null, [
+            'caja_id'        => (int) $request->caja_id,
+            'turno_id'       => $turno->id,
+            'abrio'          => $usuario->nombre,
+            'autorizado_por' => $autorizo->id !== $usuario->id ? $autorizo->nombre : null,
+        ], trim($request->motivo));
 
         return $this->resultado([$trabajo]);
     }
@@ -119,6 +134,29 @@ class ImpresionApiController extends Controller
         $otra = $request->filled('impresora_id') ? Impresora::find($request->impresora_id) : null;
 
         return $this->resultado([ImpresionService::reintentar($trabajo, $otra)]);
+    }
+
+    // POST /impresion/cola/tomar {dispositivo}: lo que la tablet del local debe mandar a la impresora
+    public function tomarCola(Request $request)
+    {
+        $datos = $request->validate(['dispositivo' => 'required|string|max:80']);
+
+        return response()->json([
+            'success'  => 1,
+            'trabajos' => ImpresionService::tomarCola($datos['dispositivo']),
+        ]);
+    }
+
+    // POST /impresion/trabajos/{trabajo}/resultado {ok, error?}: la tablet avisa cómo le fue
+    public function resultadoDispositivo(Request $request, TrabajoImpresion $trabajo)
+    {
+        $datos = $request->validate(['ok' => 'required|boolean', 'error' => 'nullable|string|max:500']);
+        if ($trabajo->impresora?->conexion !== 'dispositivo') {
+            return response()->json(['success' => false, 'message' => 'Ese trabajo no lo imprime la tablet'], 422);
+        }
+        $trabajo = ImpresionService::resultadoDispositivo($trabajo, (bool) $datos['ok'], $datos['error'] ?? null);
+
+        return response()->json(['success' => 1, 'estado' => $trabajo->estado]);
     }
 
     // DELETE /impresion/trabajos/{trabajo}: quita de la lista un error que ya no importa (no se imprime)

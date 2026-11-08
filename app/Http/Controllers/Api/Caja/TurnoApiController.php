@@ -180,6 +180,8 @@ class TurnoApiController extends Controller
             'success'     => 1,
             'caja'        => ['id' => $caja->id, 'nombre' => $caja->nombre, 'activo' => $caja->activo],
             'turno_ajeno' => $ajeno,
+            // Datos del negocio → «Avisar si no alcanza el cambio» (lo usa la ventana de cobro)
+            'aviso_cambio' => (bool) ConfiguracionNegocio::actual()->aviso_cambio,
         ] + ($turno ? $this->detalle($turno, $this->ocultarEsperado($request)) : ['turno' => null] + $this->alAbrir($caja)));
     }
 

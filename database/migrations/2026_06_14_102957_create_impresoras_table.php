@@ -14,7 +14,7 @@ return new class extends Migration
         Schema::create('impresoras', function (Blueprint $table) {
             $table->id();
             $table->string('alias', 200);                       // Nombre amigable ej: "Impresora Cocina"
-            $table->enum('conexion', ['red', 'windows'])->default('red');
+            $table->enum('conexion', ['red', 'windows', 'dispositivo'])->default('red'); // dispositivo: la tablet del local la recibe de la cola y la manda por Wi-Fi (servidor en la nube)
             $table->string('ip_impresora', 50)->nullable();     // IP de la impresora térmica
             $table->unsignedSmallInteger('puerto')->default(9100);
             $table->string('nombre_windows', 200)->nullable();

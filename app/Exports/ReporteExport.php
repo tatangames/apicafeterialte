@@ -41,7 +41,7 @@ class ReporteExport implements FromArray, ShouldAutoSize, WithColumnFormatting, 
             return null;
         }
         if ($columna['formato'] === 'fecha') {
-            return Carbon::parse($valor)->format('d/m/Y');
+            return Carbon::parse($valor)->format('d-m-Y');
         }
         return in_array($columna['formato'], ['dinero', 'costo', 'numero', 'porcentaje'], true) ? (float) $valor : $valor;
     }

@@ -144,7 +144,7 @@ class InventarioApiController extends Controller
                 ->get()
                 ->map(fn($e) => [
                     'id'          => $e->id,
-                    'fecha'       => $e->fecha->format('d/m/Y'),
+                    'fecha'       => $e->fecha->format('d-m-Y'),
                     'tipo'        => $e->tipo,
                     'descripcion' => $e->descripcion,
                     'usuario'     => $e->usuario?->nombre,
@@ -285,7 +285,7 @@ class InventarioApiController extends Controller
 
             return response()->json([
                 'id'          => $entrada->id,
-                'fecha'       => $entrada->fecha->format('d/m/Y'),
+                'fecha'       => $entrada->fecha->format('d-m-Y'),
                 'tipo'        => $entrada->tipo,
                 'descripcion' => $entrada->descripcion,
                 'usuario'     => $entrada->usuario?->nombre,

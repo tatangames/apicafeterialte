@@ -231,8 +231,8 @@ class ConfiguracionApiController extends Controller
     {
         return [
             'alias'            => 'required|string|max:200',
-            'conexion'         => 'required|in:red,windows',
-            'ip_impresora'     => 'nullable|required_if:conexion,red|ip',
+            'conexion'         => 'required|in:red,windows,dispositivo',
+            'ip_impresora'     => 'nullable|required_if:conexion,red,dispositivo|ip',
             'puerto'           => 'nullable|integer|min:1|max:65535',
             'nombre_windows'   => 'nullable|required_if:conexion,windows|string|max:200',
             'ip_servidor'      => 'nullable|string|max:50',
@@ -354,11 +354,13 @@ class ConfiguracionApiController extends Controller
     public function testProduccion(Request $request, Impresora $impresora)
     {
         $trabajo = ImpresionService::pruebaProduccion($impresora, $request->user()?->id);
-        $ok = $trabajo->estado === 'impreso';
+        // «pendiente»: la impresora la maneja la tablet del local y el trabajo quedó en su cola
+        $ok = in_array($trabajo->estado, ['impreso', 'pendiente'], true);
 
         return response()->json([
             'success' => $ok,
-            'message' => $ok ? 'Impreso correctamente' : $trabajo->error,
+            'message' => $trabajo->estado === 'pendiente' ? 'Enviado a la tablet que imprime: debe salir en unos segundos'
+                : ($ok ? 'Impreso correctamente' : $trabajo->error),
             'trabajo' => $trabajo->only(['id', 'estado', 'error']),
         ], $ok ? 200 : 422);
     }
@@ -367,11 +369,13 @@ class ConfiguracionApiController extends Controller
     public function testPrintImpresoraReal(Request $request, Impresora $impresora)
     {
         $trabajo = ImpresionService::prueba($impresora, $request->user()?->id);
-        $ok = $trabajo->estado === 'impreso';
+        // «pendiente»: la impresora la maneja la tablet del local y el trabajo quedó en su cola
+        $ok = in_array($trabajo->estado, ['impreso', 'pendiente'], true);
 
         return response()->json([
             'success' => $ok,
-            'message' => $ok ? 'Impreso correctamente' : $trabajo->error,
+            'message' => $trabajo->estado === 'pendiente' ? 'Enviado a la tablet que imprime: debe salir en unos segundos'
+                : ($ok ? 'Impreso correctamente' : $trabajo->error),
             'trabajo' => $trabajo->only(['id', 'estado', 'error']),
         ], $ok ? 200 : 422);
     }

@@ -100,3 +100,13 @@ La suite completa tiene 206 pruebas.
 
 - Los **modificadores** de la Fase 12 («extra queso») todavía no descuentan insumos. Se puede agregar una receta por modificador con el mismo mecanismo.
 - **Mínimo sugerido** a partir del consumo promedio por recetas (propuesta al cliente; hoy el mínimo se pone a mano).
+
+## Platos sin ingredientes suficientes no se agregan (2026-11-06)
+
+- `ProduccionService::alcanza()` calcula cuántas unidades de un plato con receta de venta alcanzan con la existencia de sus insumos, menos lo apartado en cuentas abiertas. El que se acaba primero manda.
+- `GET /pos/catalogo` y `GET /mesas/catalogo` traen `alcanza` por producto (`null` si no tiene receta con insumos con inventario).
+- **Sin stock negativo** (Datos del negocio), la venta rápida y la mesa, en la web y en la tablet:
+  - marcan «Agotado» el plato que no alcanza y no lo dejan agregar («No alcanzan los ingredientes para Americano»);
+  - no dejan subir la cantidad por encima de lo que alcanza.
+- Los extras agotados («Con leche») ya se marcaban así. El servidor lo sigue revisando al cobrar o al agregar a la mesa, porque dos platos pueden compartir un insumo.
+- Prueba: `RecetasVentaTest::test_el_catalogo_dice_cuantos_platos_alcanzan_con_los_insumos`.

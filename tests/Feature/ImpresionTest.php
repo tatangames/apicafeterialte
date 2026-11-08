@@ -326,22 +326,15 @@ class ImpresionTest extends TestCase
         $this->assertStringNotContainsString('Pan francés', $barra);
     }
 
-    public function test_venta_de_mostrador_sin_area_sale_en_comanda_general(): void
+    public function test_venta_de_mostrador_sin_area_solo_imprime_el_ticket(): void
     {
         $this->impresora(['predeterminada' => true]); // solo la de tickets
         $this->actuarComo('cajero');
         $id = $this->vender([['producto_id' => $this->pan->id, 'cantidad' => 6]], 'Efectivo', 1);
 
-        $this->postJson("/api/impresion/ventas/{$id}", ['comandas' => true])->assertJsonCount(2, 'trabajos');
-
-        $comanda = $this->transporte->texto(1);
-        $this->assertStringContainsString('Solicitud de producción', $comanda);
-        // Mismo formato que la comanda de mesa: número de la venta, Mostrador y ORIGINAL
-        foreach (['#000001', 'Solicitud de producción', 'Mostrador', 'CANT    DESCRIPCIÓN', 'ORIGINAL'] as $linea) {
-            $this->assertStringContainsString($linea, $comanda);
-        }
-        $this->assertStringContainsString('6       Pan francés', $comanda);
-        $this->assertStringNotContainsString('** ', $comanda); // sin área: comanda general, sin encabezado de área
+        // El pan de vitrina se entrega directo: sale el ticket de venta y ninguna comanda
+        $this->postJson("/api/impresion/ventas/{$id}", ['comandas' => true])->assertJsonCount(1, 'trabajos');
+        $this->assertStringNotContainsString('Solicitud de producción', $this->transporte->texto(0));
     }
 
     public function test_comandas_de_precuenta_con_notas(): void
@@ -394,13 +387,43 @@ class ImpresionTest extends TestCase
     public function test_abrir_cajon_exige_motivo_y_queda_auditado(): void
     {
         $this->impresora(['predeterminada' => true]);
-        $this->actuarComo('cajero');
+        $this->actuarComo('admin');
 
         $this->postJson('/api/impresion/cajon', ['caja_id' => $this->caja->id])->assertStatus(422);
         $this->postJson('/api/impresion/cajon', ['caja_id' => $this->caja->id, 'motivo' => 'Dar cambio'])->assertJsonPath('impreso', true);
 
         $this->assertSame("\x1Bp\x00\x19\xFA", substr($this->transporte->enviados[0]['bytes'], -5));
         $this->assertDatabaseHas('auditorias', ['accion' => 'abrir_cajon', 'descripcion' => 'Dar cambio']);
+    }
+
+    public function test_sin_el_permiso_el_cajon_se_abre_con_el_pin_del_administrador(): void
+    {
+        $this->impresora(['predeterminada' => true]);
+        $this->crearUsuario('admin', ['nombre' => 'Eduardo', 'pin' => '4321', 'pin_actualizado_at' => now()]);
+        $mesero = $this->actuarComo('mesero', ['nombre' => 'Ana']);
+        $this->assertFalse($mesero->can('caja.abrir_cajon'), 'El mesero no lo trae de entrada');
+
+        $datos = ['caja_id' => $this->caja->id, 'motivo' => 'Cliente pagó un billete de $20 por otra cosa'];
+        $this->postJson('/api/impresion/cajon', $datos)->assertStatus(403)->assertJsonPath('status', 'SIN_PERMISO');
+        $this->assertCount(0, $this->transporte->enviados);
+        $this->postJson('/api/impresion/cajon', [...$datos, 'autorizacion' => '0000'])->assertStatus(403);
+        $this->postJson('/api/impresion/cajon', [...$datos, 'autorizacion' => '4321'])->assertOk()->assertJsonPath('impreso', true);
+
+        $registro = \App\Models\Auditoria::where('accion', 'abrir_cajon')->latest('id')->first();
+        $this->assertSame('Cliente pagó un billete de $20 por otra cosa', $registro->descripcion);
+        $this->assertSame('Ana', $registro->datos_despues['abrio']);
+        $this->assertSame('Eduardo', $registro->datos_despues['autorizado_por']);
+        $this->assertSame($this->turno->id, $registro->datos_despues['turno_id']);
+    }
+
+    public function test_sin_turno_abierto_no_se_abre_el_cajon(): void
+    {
+        $this->impresora(['predeterminada' => true]);
+        $this->actuarComo('admin');
+        $this->turno->update(['estado' => 'cerrado']);
+
+        $this->postJson('/api/impresion/cajon', ['caja_id' => $this->caja->id, 'motivo' => 'x'])->assertStatus(422)
+            ->assertJsonPath('message', 'Abre el turno de esta caja antes de abrir el cajón');
     }
 
     // ── Configuración ───────────────────────────────────────────

@@ -180,3 +180,19 @@ En la venta rápida de la tablet, **«Enviar comanda»** manda el pedido a cocin
 - **Inventario:** el producto se descuenta al cobrar, no al enviar a cocina.
 - **Venta rápida:** no tiene modificadores; se agregan solo en las mesas.
 - **Actualización:** la pantalla de cocina y el mapa se actualizan por consulta periódica (8 y 15 segundos), no al instante.
+
+## Existencia en las tarjetas y permiso para verla (2026-11-06)
+
+- **Pantalla de mesa (web y tablet):** cada producto con inventario propio muestra su **disponible** abajo a la derecha, junto al precio. El disponible es la existencia menos lo apartado en otras cuentas abiertas. Sale en gris, en ámbar en la web o rojo en la tablet si está bajo su mínimo, y en rojo si no queda. Los platos que salen de su receta no muestran número.
+- **API:** `GET /mesas/catalogo` agrega `bajo_minimo` y `unidad` a cada producto (ya traía `stock` y `disponible`).
+- **Permiso nuevo `pos.ver_existencias`** («Ver la existencia en las tarjetas de productos»), en el módulo Punto de venta:
+  - Sin él, la venta rápida y la mesa (web y tablet) ocultan la cantidad, pero siguen mostrando «Agotado».
+  - El rol mesero lo trae de entrada; se quita en Roles y permisos. El admin siempre lo tiene.
+
+**Lo que se entrega directo ya no imprime comanda (2026-11-07).** Reemplaza «Todo sale en comanda» (2026-11-02).
+- Una categoría puede quedar **sin área** («Sin comanda (se entrega directo)» en Configuración › Mesas y cocina › Áreas, web y tablet). `PUT /mesas/config/categorias` acepta `area_id: null` (la clave tiene que venir).
+- **Venta rápida:** lo que no tiene área no sale en comanda; solo el ticket de venta (`ImpresionService::comandas`, y `comandasDeMostrador` en el navegador).
+- **Mesas y pedidos de mostrador:** al tocar Enviar, lo que no tiene área queda **entregado** sin comanda (`OrdenService::enviar`). Si solo había eso, la respuesta dice «Productos entregados (no pasan por cocina)». Cancelarlo después sigue pidiendo motivo y autorización, pero no imprime aviso de cancelación.
+- **Pedidos especiales:** siguen imprimiendo todo, porque son encargos a producción; lo que no tiene área sale en la comanda general.
+- El formulario del producto dice «Sin comanda: se entrega directo» en lugar de avisar de la comanda general.
+- **Pruebas:** `MesasTest::test_enviar_crea_una_comanda_por_area_y_lo_sin_area_se_entrega_directo` e `ImpresionTest::test_venta_de_mostrador_sin_area_solo_imprime_el_ticket`.

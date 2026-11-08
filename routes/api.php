@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\Auth\DashboardApiController;
 use App\Http\Controllers\Api\Config\RolesApiController;
 use App\Http\Controllers\Api\Config\ConfiguracionApiController;
 use App\Http\Controllers\Api\Config\NegocioApiController;
+use App\Http\Controllers\Api\Config\FelApiController;
 use App\Http\Controllers\Api\Config\AuditoriaApiController;
 use App\Http\Controllers\Api\Productos\ProductosApiController;
 use App\Http\Controllers\Api\Productos\InventarioApiController;
@@ -73,6 +74,13 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
     // Lectura para cualquier usuario autenticado (ticket, moneda, IVA)
     Route::get('/configuracion/negocio', [NegocioApiController::class, 'mostrar']);
     Route::post('/configuracion/negocio', [NegocioApiController::class, 'actualizar'])->middleware('permission:configuracion.gestionar');
+
+    // Facturación electrónica (DTE Hacienda): incluye credenciales, solo quien gestiona la configuración
+    Route::middleware('permission:configuracion.gestionar')->group(function () {
+        Route::get('/configuracion/fel', [FelApiController::class, 'mostrar']);
+        Route::put('/configuracion/fel', [FelApiController::class, 'actualizar']);
+        Route::post('/configuracion/fel/probar', [FelApiController::class, 'probar'])->middleware('throttle:10,1');
+    });
 
     // ── ROLES Y PERMISOS ──────────────────────────────────────
     Route::get('/admin/roles/tabla', [RolesApiController::class,'listadoRoles'])->middleware('permission:roles.gestionar|usuarios.gestionar');
@@ -234,7 +242,11 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
     Route::post('/impresion/ventas/{venta}', [ImpresionApiController::class, 'venta'])->middleware('permission:pos.vender|pos.historial');
     Route::post('/impresion/pedidos/{pedido}/comandas', [ImpresionApiController::class, 'comandasPedido'])->middleware('permission:pos.precuentas');
     Route::post('/impresion/turnos/{turno}', [ImpresionApiController::class, 'turno'])->middleware('permission:caja.cerrar|caja.historial|caja.arqueo');
-    Route::post('/impresion/cajon', [ImpresionApiController::class, 'cajon'])->middleware('permission:caja.movimientos');
+    // caja.abrir_cajon se revisa en el controlador: sin él se pide el PIN de quien lo tenga
+    Route::post('/impresion/cajon', [ImpresionApiController::class, 'cajon'])->middleware('permission:caja.movimientos|pos.vender');
+    // La tablet que imprime (servidor en la nube): toma la cola y reporta el resultado
+    Route::post('/impresion/cola/tomar', [ImpresionApiController::class, 'tomarCola'])->middleware(['permission:pos.vender|pos.precuentas', 'throttle:120,1']);
+    Route::post('/impresion/trabajos/{trabajo}/resultado', [ImpresionApiController::class, 'resultadoDispositivo'])->middleware('permission:pos.vender|pos.precuentas');
     Route::get('/impresion/trabajos', [ImpresionApiController::class, 'trabajos'])->middleware('permission:impresoras.gestionar');
     Route::delete('/impresion/trabajos', [ImpresionApiController::class, 'eliminarErrores'])->middleware('permission:impresoras.gestionar');
     Route::delete('/impresion/trabajos/{trabajo}', [ImpresionApiController::class, 'eliminar'])->middleware('permission:impresoras.gestionar');

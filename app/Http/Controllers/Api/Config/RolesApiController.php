@@ -322,6 +322,7 @@ class RolesApiController extends Controller
     {
         $rol = Role::findOrFail($id);
         $catalogo = config('permisos.permisos');
+        $ayuda = config('permisos.ayuda', []);
         $modulos = config('permisos.modulos');
         $asignados = $rol->permissions->pluck('name')->flip();
 
@@ -334,6 +335,8 @@ class RolesApiController extends Controller
             $grupos[$modulo][] = [
                 'nombre'      => $permiso->name,
                 'descripcion' => $catalogo[$permiso->name] ?? $permiso->description ?? $permiso->name,
+                // Explicación larga (qué deja hacer, dónde y qué pasa sin él) para el botón «?»
+                'ayuda'       => $ayuda[$permiso->name] ?? null,
                 'asignado'    => $rol->name === 'admin' || $asignados->has($permiso->name),
             ];
         }

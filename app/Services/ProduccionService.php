@@ -94,8 +94,11 @@ class ProduccionService
             if ($insumo->id === $producto->id) {
                 throw new NegocioException('Un producto no puede ser ingrediente de su propia receta');
             }
-            if ($uso === 'venta' && !$insumo->controla_stock) {
-                throw new NegocioException("{$insumo->nombre} no lleva inventario: no se puede descontar al vender {$producto->nombre}");
+            // Un ingrediente sin existencia propia no tiene nada que descontar
+            if (!$insumo->controla_stock) {
+                throw new NegocioException($uso === 'venta'
+                    ? "{$insumo->nombre} no lleva inventario: no se puede descontar al vender {$producto->nombre}"
+                    : "{$insumo->nombre} no lleva inventario: no se puede descontar al producir {$producto->nombre}");
             }
             if (!$unidad) {
                 throw new NegocioException("Indica la unidad de {$insumo->nombre}");
@@ -162,6 +165,32 @@ class ProduccionService
      *
      * @return array [['producto_id' => int, 'cantidad' => float], ...]
      */
+    /**
+     * Cuántas unidades de un plato con receta de venta alcanzan con lo que hay de sus
+     * insumos (menos lo apartado en cuentas abiertas): lo limita el insumo que se acaba
+     * primero. null si la receta no lleva insumos con inventario.
+     * @param array<int, float> $stock    [insumo_id => existencia]
+     * @param array<int, float> $apartado [insumo_id => cantidad]
+     */
+    public static function alcanza(Receta $receta, array $stock, array $apartado = []): ?float
+    {
+        $alcanza = null;
+        foreach (self::consumoDeVenta($receta, 1) as $i) {
+            $hay = max(0, (float) ($stock[$i['producto_id']] ?? 0) - (float) ($apartado[$i['producto_id']] ?? 0));
+            $n = floor($hay / $i['cantidad'] + 0.000001);
+            $alcanza = $alcanza === null ? $n : min($alcanza, $n);
+        }
+        return $alcanza;
+    }
+
+    /** Existencia de los insumos de varias recetas, para alcanza(). @return array<int, float> */
+    public static function stockDeInsumos($recetas): array
+    {
+        $ids = collect($recetas)->flatMap(fn (Receta $r) => $r->ingredientes->pluck('producto_id'))->unique()->values();
+        return $ids->isEmpty() ? [] : \App\Models\Inventario::whereIn('producto_id', $ids)->pluck('stock_actual', 'producto_id')
+            ->map(fn ($v) => (float) $v)->all();
+    }
+
     public static function consumoDeVenta(Receta $receta, float $cantidad): array
     {
         $receta->loadMissing(['ingredientes.producto.unidadMedida', 'ingredientes.unidad']);

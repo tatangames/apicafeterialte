@@ -282,7 +282,8 @@ class CajaTest extends TestCase
         $this->getJson("/api/caja/turno-actual?caja_id={$this->caja->id}")
             ->assertOk()
             ->assertJsonPath('resumen.efectivo_esperado', null)
-            ->assertJsonPath('cierre_ciego', true);
+            ->assertJsonPath('cierre_ciego', true)
+            ->assertJsonPath('aviso_cambio', true); // la ventana de cobro avisa si no alcanza el cambio (por defecto, sí)
 
         $this->actuarComo('admin');
         $this->getJson("/api/caja/turno-actual?caja_id={$this->caja->id}")

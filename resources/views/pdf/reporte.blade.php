@@ -30,14 +30,14 @@
             'costo'      => '$' . number_format((float) $valor, 4),
             'numero'     => rtrim(rtrim(number_format((float) $valor, 3), '0'), '.'),
             'porcentaje' => number_format((float) $valor, 1) . '%',
-            'fecha'      => \Carbon\Carbon::parse($valor)->format('d/m/Y'),
+            'fecha'      => \Carbon\Carbon::parse($valor)->format('d-m-Y'),
             default      => $valor,
         };
     };
     $numerico = fn ($formato) => in_array($formato, ['dinero', 'costo', 'numero', 'porcentaje'], true);
 @endphp
 
-<div class="pie">{{ $negocio->nombre }} · {{ $reporte['titulo'] }} · generado el {{ $generado->format('d/m/Y H:i') }} por {{ $usuario }}</div>
+<div class="pie">{{ $negocio->nombre }} · {{ $reporte['titulo'] }} · generado el {{ $generado->format('d-m-Y H:i') }} por {{ $usuario }}</div>
 
 <table class="encabezado">
     <tr>

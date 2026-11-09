@@ -120,6 +120,24 @@ class MesasTest extends TestCase
         $this->assertCount(5, OrdenItem::where('orden_id', $orden)->get());
     }
 
+    public function test_el_mismo_producto_de_otro_mesero_va_en_su_propia_linea(): void
+    {
+        // Mesero 1 pide 3 cocas y se va; mesero 2 entra en la misma tablet y agrega 1 más
+        $mesero1 = $this->actuarComo('mesero', ['nombre' => 'Mesero 1']);
+        $orden = $this->abrir($this->mesa1)['id'];
+        $this->agregar($orden, [['producto_id' => $this->pan->id, 'cantidad' => 3]])->assertOk();
+        $mesero2 = $this->actuarComo('mesero', ['nombre' => 'Mesero 2']);
+        $this->agregar($orden, [['producto_id' => $this->pan->id, 'cantidad' => 1]])->assertOk();
+        $this->agregar($orden, [['producto_id' => $this->pan->id, 'cantidad' => 1]])->assertOk();
+
+        $items = OrdenItem::where('orden_id', $orden)->orderBy('id')->get();
+        $this->assertCount(2, $items);
+        $this->assertSame($mesero1->id, $items[0]->usuario_id);
+        $this->assertEqualsWithDelta(3, (float) $items[0]->cantidad, 0.0001);
+        $this->assertSame($mesero2->id, $items[1]->usuario_id);
+        $this->assertEqualsWithDelta(2, (float) $items[1]->cantidad, 0.0001);
+    }
+
     public function test_renombrar_la_cuenta(): void
     {
         $this->actuarComo('mesero');

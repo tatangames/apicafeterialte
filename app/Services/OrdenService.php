@@ -325,9 +325,11 @@ class OrdenService
                 $precio = round((float) $producto->precio_venta + $extra, 2);
 
                 // El mismo producto, con los mismos extras, ingredientes y nota, que aún no se
-                // envía en esta cuenta: se suma a esa línea («2 × Americano») en vez de repetirla
+                // envía en esta cuenta y que agregó el mismo mesero: se suma a esa línea
+                // («2 × Americano») en vez de repetirla. Lo de otro mesero va en su propia línea
                 $igual = OrdenItem::where('orden_id', $orden->id)->where('ticket_id', $ticket->id)
-                    ->where('producto_id', $producto->id)->where('estado', 'pendiente')->lockForUpdate()->get()
+                    ->where('producto_id', $producto->id)->where('estado', 'pendiente')
+                    ->where('usuario_id', $usuario->id)->lockForUpdate()->get()
                     ->first(fn (OrdenItem $o) => (float) $o->precio_unitario === $precio
                         && ($o->notas ?: null) === $notas
                         && self::mismaLista($o->modificadores, $modificadores)

@@ -118,22 +118,43 @@ class OrdenService
     }
 
     /**
-     * Sin stock negativo permitido (Datos del negocio), no se aparta más de lo que hay:
-     * así el mesero se entera al tomar la orden y no al cobrar.
+     * Avisos de existencia de la última vez que se agregó o cambió algo (agregarItems,
+     * actualizarItem). Los controladores los devuelven en «avisos» para mostrarlos al mesero.
+     * @var string[]
      */
-    private static function validarExistencia(Producto $producto, float $cantidad, ?int $excluirItemId = null, float $yaEnEsteEnvio = 0): void
+    public static array $avisos = [];
+
+    private static function avisar(string $texto): void
+    {
+        if (!in_array($texto, self::$avisos, true)) {
+            self::$avisos[] = $texto;
+        }
+    }
+
+    private static function cantidadTexto(float $c): string
+    {
+        return rtrim(rtrim(number_format(max(0, $c), 3, '.', ''), '0'), '.');
+    }
+
+    /**
+     * Sin stock negativo permitido (Datos del negocio), avisa si lo pedido en cuentas abiertas
+     * pasa de lo que hay. No bloquea: el mesero lo agrega igual y el cobro es el que exige
+     * que haya existencia (InventarioService no deja quedar en negativo).
+     */
+    private static function validarExistencia(Producto $producto, float $cantidad, ?int $excluirItemId = null): void
     {
         if (!$producto->controla_stock || ConfiguracionNegocio::actual()->permitir_stock_negativo) {
             return;
         }
         $stock = (float) (Inventario::where('producto_id', $producto->id)->value('stock_actual') ?? 0);
-        $disponible = $stock - (self::apartado([$producto->id], $excluirItemId)->get($producto->id) ?? 0) - $yaEnEsteEnvio;
+        // Las líneas anteriores de la misma petición ya están guardadas: apartado() las cuenta
+        $pedido = (self::apartado([$producto->id], $excluirItemId)->get($producto->id) ?? 0) + $cantidad;
 
-        if ($cantidad > $disponible + 0.0001) {
-            $quedan = rtrim(rtrim(number_format(max(0, $disponible), 3, '.', ''), '0'), '.');
-            throw new NegocioException($disponible <= 0.0001
-                ? "No hay existencia de {$producto->nombre}"
-                : "Solo quedan {$quedan} de {$producto->nombre}");
+        if ($pedido > $stock + 0.0001) {
+            self::avisar($stock <= 0.0001
+                ? "No hay existencia de {$producto->nombre}: se agregó, pero no se podrá cobrar hasta que haya."
+                : "No alcanzan las unidades de {$producto->nombre}: hay " . self::cantidadTexto($stock)
+                    . ' y en cuentas abiertas ya van ' . self::cantidadTexto($pedido) . '. Se agregó, pero al cobrar se revisará la existencia.');
         }
     }
 
@@ -182,12 +203,12 @@ class OrdenService
     }
 
     /**
-     * Sin stock negativo, revisa que alcancen los insumos de la receta y de los extras
-     * («No hay existencia de Leche entera») contando lo apartado en cuentas abiertas.
-     * $enEsteEnvio acumula lo que piden las líneas anteriores de la misma petición.
+     * Sin stock negativo, avisa si no alcanzan los insumos de la receta y de los extras
+     * («No hay existencia de Leche entera») contando lo apartado en cuentas abiertas. No bloquea.
+     * Las líneas anteriores de la misma petición ya están guardadas: insumosApartados() las cuenta.
      */
     private static function validarInsumos(Producto $producto, float $cantidad, array $modificadorIds, array $factores = [],
-        ?int $excluirItemId = null, array &$enEsteEnvio = []): void
+        ?int $excluirItemId = null): void
     {
         if (ConfiguracionNegocio::actual()->permitir_stock_negativo) {
             return;
@@ -199,17 +220,13 @@ class OrdenService
         $apartado = self::insumosApartados($excluirItemId);
         $insumos = Producto::with('inventario:producto_id,stock_actual', 'unidadMedida')->whereIn('id', array_keys($necesita))->get();
         foreach ($insumos as $insumo) {
-            $disponible = (float) ($insumo->inventario?->stock_actual ?? 0) - ($apartado[$insumo->id] ?? 0) - ($enEsteEnvio[$insumo->id] ?? 0);
+            $disponible = (float) ($insumo->inventario?->stock_actual ?? 0) - ($apartado[$insumo->id] ?? 0);
             if ($necesita[$insumo->id] > $disponible + 0.0001) {
                 $u = $insumo->unidadMedida?->abreviatura ? ' ' . $insumo->unidadMedida->abreviatura : '';
-                $quedan = rtrim(rtrim(number_format(max(0, $disponible), 3, '.', ''), '0'), '.');
-                throw new NegocioException($disponible <= 0.0001
-                    ? "No hay existencia de {$insumo->nombre} para {$producto->nombre}"
-                    : "Solo quedan {$quedan}{$u} de {$insumo->nombre}: no alcanza para {$producto->nombre}");
+                self::avisar($disponible <= 0.0001
+                    ? "No hay existencia de {$insumo->nombre} para {$producto->nombre}: se agregó, pero al cobrar se revisará."
+                    : 'Solo quedan ' . self::cantidadTexto($disponible) . "{$u} de {$insumo->nombre}: no alcanza para {$producto->nombre}. Se agregó, pero al cobrar se revisará.");
             }
-        }
-        foreach ($necesita as $id => $c) {
-            $enEsteEnvio[$id] = ($enEsteEnvio[$id] ?? 0) + $c;
         }
     }
 
@@ -292,15 +309,14 @@ class OrdenService
      */
     public static function agregarItems(Orden $orden, ?int $ticketId, array $items, Administrador $usuario): Collection
     {
+        self::$avisos = [];
         $productos = Producto::with(['categorias.area'])->whereIn('id', collect($items)->pluck('producto_id'))->get()->keyBy('id');
 
         return DB::transaction(function () use ($orden, $ticketId, $items, $usuario, $productos) {
             $orden = self::bloquear($orden);
             $ticket = self::ticketDe($orden, $ticketId);
-            $enEsteEnvio = [];
-            $insumosEnEnvio = [];
 
-            return collect($items)->map(function ($i) use ($orden, $ticket, $usuario, $productos, &$enEsteEnvio, &$insumosEnEnvio) {
+            return collect($items)->map(function ($i) use ($orden, $ticket, $usuario, $productos) {
                 $producto = $productos->get($i['producto_id']);
                 if (!$producto || !$producto->activo || !$producto->se_vende) {
                     throw new NegocioException('Uno de los productos no está disponible para la venta');
@@ -313,14 +329,13 @@ class OrdenService
                     throw new NegocioException("{$producto->nombre} solo se vende por unidades enteras");
                 }
 
-                self::validarExistencia($producto, $cantidad, null, $enEsteEnvio[$producto->id] ?? 0);
-                $enEsteEnvio[$producto->id] = ($enEsteEnvio[$producto->id] ?? 0) + $cantidad;
+                self::validarExistencia($producto, $cantidad);
 
                 [$modificadores, $extra] = self::resolverModificadores($producto, $i['modificadores'] ?? []);
 
                 $ajustes = self::resolverAjustes($producto, $i['ajustes'] ?? []);
                 self::validarInsumos($producto, $cantidad, collect($modificadores)->pluck('id')->all(),
-                    (new OrdenItem(['ajustes' => $ajustes]))->factoresAjuste(), null, $insumosEnEnvio);
+                    (new OrdenItem(['ajustes' => $ajustes]))->factoresAjuste());
                 $notas = trim((string) ($i['notas'] ?? '')) ?: null;
                 $precio = round((float) $producto->precio_venta + $extra, 2);
 
@@ -371,6 +386,7 @@ class OrdenService
     // Cambia cantidad o notas de un producto que todavía no se envía
     public static function actualizarItem(OrdenItem $item, array $datos): OrdenItem
     {
+        self::$avisos = [];
         return DB::transaction(function () use ($item, $datos) {
             self::bloquear($item->orden);
             $item = OrdenItem::whereKey($item->id)->lockForUpdate()->first();

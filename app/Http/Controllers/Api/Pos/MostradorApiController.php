@@ -172,6 +172,7 @@ class MostradorApiController extends Controller
                     ? ' a ' . $comandas->map(fn ($c) => $c->area?->nombre)->filter()->join(' y ') : ''),
                 'pedido'    => self::pendientes($ticket->orden->fresh())->firstWhere('ticket_id', $ticket->id),
                 'impresion' => $impresion,
+                'avisos'    => OrdenService::$avisos,
             ], 201);
         });
     }
@@ -197,6 +198,7 @@ class MostradorApiController extends Controller
             'message'   => "Se agregó al pedido de {$ticket->nombre}",
             'pedido'    => self::pendientes($orden->fresh())->firstWhere('ticket_id', $ticket->id),
             'impresion' => self::respuestaImpresion($comandas, $usuario->id),
+            'avisos'    => OrdenService::$avisos,
         ]);
     }
 }

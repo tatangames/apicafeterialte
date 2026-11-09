@@ -109,7 +109,8 @@ class RecetasVentaTest extends TestCase
         $this->turno->update(['usuario_apertura_id' => auth('sanctum')->id()]);
         $orden = $this->postJson("/api/mesas/terminales/{$mesa->id}/abrir", [])->assertOk()->json('orden.id');
         $this->postJson("/api/mesas/ordenes/{$orden}/items", ['items' => [['producto_id' => $this->limonada->id, 'cantidad' => 2]]])->assertOk();
-        $this->assertEquals(5, $alcanza('/api/mesas/catalogo'));
+        // En mesas se ve lo que hay (al pasarse se avisa); la venta rápida sí resta lo apartado
+        $this->assertEquals(7, $alcanza('/api/mesas/catalogo'));
         $this->assertEquals(5, $alcanza('/api/pos/catalogo'));
 
         // Sin limones no alcanza ninguna; un plato sin receta no dice nada

@@ -188,14 +188,23 @@ class MesasTest extends TestCase
 
         $this->actuarComo('mesero');
         $orden = $this->abrir($this->mesa1)['id'];
-        $this->agregar($orden, [$this->frappe(['entera'])])->assertOk();
+        $this->agregar($orden, [$this->frappe(['entera'])])->assertOk()->assertJsonPath('avisos', []);
 
-        // Quedan 100 ml: otro con leche entera no alcanza, y el catálogo la marca agotada
-        $this->agregar($orden, [$this->frappe(['entera'])])->assertStatus(422)
-            ->assertJsonPath('message', 'Solo quedan 100 ml de Leche entera: no alcanza para Frappuccino');
-        $opciones = collect($this->getJson('/api/mesas/catalogo')->json('grupos'))->flatMap(fn ($g) => $g['opciones'])->keyBy('id');
-        $this->assertTrue($opciones[$this->op['entera']]['agotado']);
-        $this->assertFalse($opciones[$this->op['deslactosada']]['agotado']);
+        // Quedan 100 ml: otro con leche entera no alcanza; se agrega igual, con aviso (el cobro lo exige)
+        $this->agregar($orden, [$this->frappe(['entera'])])->assertOk()
+            ->assertJsonPath('avisos.0', 'Solo quedan 100 ml de Leche entera: no alcanza para Frappuccino. Se agregó, pero al cobrar se revisará.');
+        // Mismo producto y extras del mismo mesero: una línea de 2; se deja en 1 (sin aviso)
+        $item = OrdenItem::where('orden_id', $orden)->sole();
+        $this->assertEqualsWithDelta(2, (float) $item->cantidad, 0.0001);
+        $this->putJson("/api/mesas/items/{$item->id}", ['cantidad' => 1])->assertOk()->assertJsonPath('avisos', []);
+
+        // El catálogo marca agotada la opción con la existencia real (no resta lo de cuentas abiertas)
+        $agotada = fn () => collect($this->getJson('/api/mesas/catalogo')->json('grupos'))->flatMap(fn ($g) => $g['opciones'])->keyBy('id');
+        $this->assertFalse($agotada()[$this->op['entera']]['agotado']);
+        Inventario::where('producto_id', $leche->id)->update(['stock_actual' => 100]);
+        $this->assertTrue($agotada()[$this->op['entera']]['agotado']);
+        $this->assertFalse($agotada()[$this->op['deslactosada']]['agotado']);
+        Inventario::where('producto_id', $leche->id)->update(['stock_actual' => 300]);
 
         // Era deslactosada: se cambia el extra sin borrar la línea y el precio se recalcula
         $item = OrdenItem::where('orden_id', $orden)->first();
@@ -205,8 +214,8 @@ class MesasTest extends TestCase
         $this->assertSame('Deslactosada', $item->modificadores[0]['opcion']);
         $this->assertEqualsWithDelta($antes + 0.25, (float) $item->precio_unitario, 0.001);
 
-        // Liberó la leche entera: ahora sí alcanza para uno
-        $this->agregar($orden, [$this->frappe(['entera'])])->assertOk();
+        // Liberó la leche entera: alcanza para otro, sin aviso
+        $this->agregar($orden, [$this->frappe(['entera'])])->assertOk()->assertJsonPath('avisos', []);
         // Y al cobrar se descuenta del inventario
         $this->cobrar($orden, [], 20)->assertCreated();
         $this->assertEqualsWithDelta(100, (float) Inventario::where('producto_id', $leche->id)->value('stock_actual'), 0.0001);
@@ -253,7 +262,7 @@ class MesasTest extends TestCase
 
         $pan = collect($this->getJson('/api/mesas/catalogo')->assertOk()->json('productos'))->firstWhere('id', $this->pan->id);
         $this->assertEquals(100, $pan['stock']);
-        $this->assertEquals(96, $pan['disponible'], 'Lo que está en otra cuenta abierta no está disponible');
+        $this->assertEquals(100, $pan['disponible'], 'La tarjeta muestra la existencia real: lo de cuentas abiertas aún no sale');
         $this->assertTrue($pan['bajo_minimo']);
         $this->assertSame('u', $pan['unidad']);
         $this->assertNull(collect($this->getJson('/api/mesas/catalogo')->json('productos'))->firstWhere('id', $this->sandwich->id)['disponible']);
@@ -282,36 +291,42 @@ class MesasTest extends TestCase
 
     // ── Modificadores ─────────────────────────────────────────
 
-    public function test_sin_stock_negativo_no_se_aparta_mas_de_lo_que_hay(): void
+    public function test_sin_stock_negativo_avisa_al_agregar_y_el_cobro_lo_exige(): void
     {
         $this->actuarComo('admin');
         \App\Models\ConfiguracionNegocio::actual()->update(['permitir_stock_negativo' => false]);
         Inventario::where('producto_id', $this->pan->id)->update(['stock_actual' => 5]);
 
         $orden1 = $this->abrir($this->mesa1)['id'];
-        $this->agregar($orden1, [['producto_id' => $this->pan->id, 'cantidad' => 3]])->assertOk();
+        $this->agregar($orden1, [['producto_id' => $this->pan->id, 'cantidad' => 3]])->assertOk()->assertJsonPath('avisos', []);
 
-        // La otra mesa ve lo que queda sin lo apartado en la primera
+        // La tarjeta muestra la existencia real, aunque haya pan en otra cuenta abierta
         $this->getJson('/api/mesas/catalogo')->assertJsonPath('permitir_stock_negativo', false)
-            ->assertJsonFragment(['nombre' => 'Pan francés', 'stock' => 5, 'disponible' => 2]);
+            ->assertJsonFragment(['nombre' => 'Pan francés', 'stock' => 5, 'disponible' => 5]);
+
+        // Pasarse de lo que hay se agrega igual, con aviso (también en un mismo envío)
         $orden2 = $this->abrir($this->mesa2)['id'];
-        $this->agregar($orden2, [['producto_id' => $this->pan->id, 'cantidad' => 3]])
-            ->assertStatus(422)->assertJsonPath('message', 'Solo quedan 2 de Pan francés');
-        // En un mismo envío también cuenta lo que ya se pidió
         $this->agregar($orden2, [['producto_id' => $this->pan->id, 'cantidad' => 1], ['producto_id' => $this->pan->id, 'cantidad' => 2]])
-            ->assertStatus(422);
-        $item = $this->agregar($orden2, [['producto_id' => $this->pan->id, 'cantidad' => 2]])->assertOk()->json('orden.tickets.0.items.0.id');
-        $this->agregar($orden2, [['producto_id' => $this->pan->id, 'cantidad' => 1]])
-            ->assertStatus(422)->assertJsonPath('message', 'No hay existencia de Pan francés');
+            ->assertOk()->assertJsonPath('avisos.0', 'No alcanzan las unidades de Pan francés: hay 5 y en cuentas abiertas ya van 6. Se agregó, pero al cobrar se revisará la existencia.');
+        $item = OrdenItem::where('orden_id', $orden2)->value('id');
 
-        // El botón «+» de la línea también respeta lo que queda
-        $this->putJson("/api/mesas/items/{$item}", ['cantidad' => 3])
-            ->assertStatus(422)->assertJsonPath('message', 'Solo quedan 2 de Pan francés');
+        // El botón «+» de la línea también avisa
+        $this->putJson("/api/mesas/items/{$item}", ['cantidad' => 4])->assertOk()
+            ->assertJsonPath('avisos.0', fn ($m) => str_starts_with($m, 'No alcanzan las unidades de Pan francés'));
+        $this->putJson("/api/mesas/items/{$item}", ['cantidad' => 2])->assertOk()->assertJsonPath('avisos', []);
 
-        // Si el negocio permite vender sin existencia, se acepta
+        // Sin existencia: también se agrega, con otro aviso
+        Inventario::where('producto_id', $this->pan->id)->update(['stock_actual' => 0]);
+        $this->agregar($orden2, [['producto_id' => $this->pan->id, 'cantidad' => 1]])->assertOk()
+            ->assertJsonPath('avisos.0', 'No hay existencia de Pan francés: se agregó, pero no se podrá cobrar hasta que haya.');
+
+        // El cobro es el que no deja vender lo que no hay
+        $this->cobrar($orden1, [], 20)->assertStatus(422);
+        $this->assertSame(0, Venta::count());
+
+        // Si el negocio permite vender sin existencia, no hay avisos
         \App\Models\ConfiguracionNegocio::actual()->update(['permitir_stock_negativo' => true]);
-        $this->agregar($orden2, [['producto_id' => $this->pan->id, 'cantidad' => 1]])->assertOk();
-        $this->assertNotNull($item);
+        $this->agregar($orden2, [['producto_id' => $this->pan->id, 'cantidad' => 1]])->assertOk()->assertJsonPath('avisos', []);
     }
 
     public function test_modificadores_suman_al_precio_y_se_validan(): void

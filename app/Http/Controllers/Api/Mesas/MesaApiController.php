@@ -190,11 +190,10 @@ class MesaApiController extends Controller
             ->where('activa', true)->where('uso', 'venta')->get()->keyBy('producto_id');
 
         $grupos = GrupoModificador::with(['opciones' => fn ($q) => $q->where('activo', true)])->where('activo', true)->get();
-        // Lo que ya está en otras cuentas abiertas no está disponible para vender
-        $apartado = OrdenService::apartado($productos->where('controla_stock', true)->pluck('id')->all());
+        // Las tarjetas muestran la existencia real (lo de cuentas abiertas aún no sale del
+        // inventario): al agregar más de lo que hay se avisa, y el cobro es el que lo exige
         $agotadas = self::opcionesAgotadas($grupos);
         $stockInsumos = ProduccionService::stockDeInsumos($recetas);
-        $apartadoInsumos = $recetas->isEmpty() ? [] : OrdenService::insumosApartados();
 
         return response()->json([
             'success'    => 1,
@@ -212,12 +211,12 @@ class MesaApiController extends Controller
                 'categorias'       => $p->categorias->pluck('id'),
                 'grupos'           => $p->gruposModificadores->pluck('id'),
                 'stock'            => $p->controla_stock ? (float) ($p->inventario?->stock_actual ?? 0) : null,
-                'disponible'       => $p->controla_stock ? round((float) ($p->inventario?->stock_actual ?? 0) - ($apartado->get($p->id) ?? 0), 4) : null,
+                'disponible'       => $p->controla_stock ? round((float) ($p->inventario?->stock_actual ?? 0), 4) : null,
                 'bajo_minimo'      => $p->controla_stock && \App\Services\InventarioService::enAlerta(
                     (float) ($p->inventario?->stock_actual ?? 0), (float) ($p->inventario?->stock_minimo ?? 0)),
                 'receta'           => $recetas->has($p->id) ? ProduccionService::ingredientesPorUnidad($recetas->get($p->id)) : [],
-                // Platos con receta: cuántos alcanzan con los insumos, menos lo apartado en otras cuentas
-                'alcanza'          => $recetas->has($p->id) ? ProduccionService::alcanza($recetas->get($p->id), $stockInsumos, $apartadoInsumos) : null,
+                // Platos con receta: cuántos alcanzan con los insumos que hay
+                'alcanza'          => $recetas->has($p->id) ? ProduccionService::alcanza($recetas->get($p->id), $stockInsumos, []) : null,
             ]),
             'categorias' => $productos->flatMap->categorias->unique('id')->sortBy('nombre')->map(fn ($c) => ['id' => $c->id, 'nombre' => $c->nombre])->values(),
             'grupos'     => $grupos->map(fn (GrupoModificador $g) => [
@@ -234,7 +233,7 @@ class MesaApiController extends Controller
 
     /**
      * Opciones de extras cuyo insumo no alcanza para una porción (Leche entera sin
-     * existencia), contando lo apartado en cuentas abiertas. Con stock negativo, ninguna.
+     * existencia), con la existencia real. Con stock negativo, ninguna.
      */
     public static function opcionesAgotadas($grupos): Collection
     {
@@ -245,12 +244,11 @@ class MesaApiController extends Controller
         if ($opciones->isEmpty()) {
             return collect();
         }
-        $apartado = OrdenService::insumosApartados();
         $stock = Inventario::whereIn('producto_id', $opciones->pluck('producto_id'))->pluck('stock_actual', 'producto_id');
 
-        return $opciones->filter(function ($o) use ($apartado, $stock) {
+        return $opciones->filter(function ($o) use ($stock) {
             $porcion = VentaService::consumoDeModificadores([$o->id], 1)[0]['cantidad'] ?? 0;
-            return $porcion > 0 && (float) ($stock[$o->producto_id] ?? 0) - ($apartado[$o->producto_id] ?? 0) < $porcion - 0.0001;
+            return $porcion > 0 && (float) ($stock[$o->producto_id] ?? 0) < $porcion - 0.0001;
         })->pluck('id')->values();
     }
 
@@ -319,7 +317,8 @@ class MesaApiController extends Controller
 
         OrdenService::agregarItems($orden, $datos['ticket_id'] ?? null, $datos['items'], $request->user());
 
-        return response()->json(['success' => 1, 'orden' => self::formatoOrden($orden->fresh())]);
+        // Avisos de existencia: se agregó igual, el cobro es el que exige que haya
+        return response()->json(['success' => 1, 'avisos' => OrdenService::$avisos, 'orden' => self::formatoOrden($orden->fresh())]);
     }
 
     // PUT /mesas/items/{item} {cantidad?, notas?, ajustes?}
@@ -338,7 +337,7 @@ class MesaApiController extends Controller
 
         OrdenService::actualizarItem($item, $request->only(array_intersect(['cantidad', 'notas', 'ajustes', 'modificadores'], array_keys($request->all()))));
 
-        return response()->json(['success' => 1, 'orden' => self::formatoOrden($item->orden->fresh())]);
+        return response()->json(['success' => 1, 'avisos' => OrdenService::$avisos, 'orden' => self::formatoOrden($item->orden->fresh())]);
     }
 
     // POST /mesas/items/{item}/quitar {motivo?, cantidad?, autorizacion?}: todo o parte (1 de 3)

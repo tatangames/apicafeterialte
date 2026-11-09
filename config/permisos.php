@@ -38,6 +38,7 @@ return [
         'caja.arqueo'               => 'Realizar arqueos',
         'caja.historial'            => 'Ver historial de cierres',
         'caja.reabrir'              => 'Reabrir turnos cerrados',
+        'caja.turno_compartido'     => 'Vender y cobrar en el turno que abrió otra persona',
 
         // Productos e inventario
         'productos.ver'             => 'Ver catálogo de productos',
@@ -127,7 +128,7 @@ return [
         'mesero' => [
             'dashboard.ver',
             'pos.vender', 'pos.descuento', 'pos.historial', 'pos.precuentas', 'pos.ver_existencias',
-            'caja.abrir', 'caja.cerrar', 'caja.movimientos', 'caja.arqueo',
+            'caja.abrir', 'caja.cerrar', 'caja.movimientos', 'caja.arqueo', 'caja.turno_compartido',
             'productos.ver', 'inventario.ver', 'inventario.registrar', 'inventario.kardex',
             'proveedores.gestionar', 'compras.ver', 'compras.gestionar', 'cuentas_pagar.gestionar',
             'produccion.ver', 'produccion.registrar', 'mermas.registrar',
@@ -144,7 +145,7 @@ return [
     'ayuda' => [
         'dashboard.ver' => 'Entra al panel de inicio: ventas del día, ticket promedio, lo más vendido, ventas por hora y avisos (productos bajo el mínimo, pedidos especiales para hoy o atrasados, turnos abiertos). Los totales de utilidad, gastos, compras y cartera solo se ven si además tiene «Ver reportes».',
 
-        'pos.vender' => 'Es el permiso básico para atender: venta rápida, pedidos de mostrador, abrir mesas, agregar productos, enviar comandas a cocina o barra y cobrar (efectivo, tarjeta, transferencia o pago mixto). Sin él no entra al punto de venta ni a las mesas. Para vender también necesita un turno de caja abierto a su nombre.',
+        'pos.vender' => 'Es el permiso básico para atender: venta rápida, pedidos de mostrador, abrir mesas, agregar productos, enviar comandas a cocina o barra y cobrar (efectivo, tarjeta, transferencia o pago mixto). Sin él no entra al punto de venta ni a las mesas. Para vender también necesita un turno de caja abierto a su nombre, o el permiso «Vender y cobrar en el turno que abrió otra persona».',
         'pos.descuento' => 'Aplica descuentos a un producto o a toda la venta, hasta el máximo sin autorización que está en Datos del negocio (por ejemplo, 10 %). Si el descuento pasa de ese máximo, se pide el PIN de alguien con «Autorizar descuentos mayores al máximo». Sin este permiso no puede poner ningún descuento.',
         'pos.descuento.autorizar' => 'Puede dar descuentos de cualquier tamaño sin pedir PIN, y su PIN sirve para autorizar el descuento grande que intenta otra persona en la tablet o la web. Cada descuento autorizado queda en Auditoría con quién lo autorizó.',
         'pos.anular' => 'Anular ventas ya cobradas (el producto regresa al inventario y el dinero sale del turno). El mismo permiso se usa para: cancelar un producto que ya se envió a cocina (sale el aviso CANCELADO), anular una comanda completa, liberar una mesa con productos sin cobrar, y anular abonos de clientes y gastos. Quien no lo tiene puede hacerlo si alguien con el permiso escribe su PIN. Todo queda en Auditoría con el motivo.',
@@ -161,6 +162,7 @@ return [
         'caja.abrir_cajon' => 'Abre el cajón de dinero sin hacer una venta (por ejemplo, para cambiar un billete), desde Caja en la web o en la tablet. Siempre pide el motivo y queda en Auditoría quién lo abrió, quién autorizó y en qué turno. Sin el permiso se pide el PIN del administrador. Al cobrar en efectivo el cajón se abre solo; este permiso no afecta eso.',
         'caja.arqueo' => 'Hace arqueos parciales: contar el efectivo a media jornada para ver si cuadra, sin cerrar el turno. También imprime el Corte X.',
         'caja.historial' => 'Ve el historial de turnos cerrados de todos los empleados, con su detalle y diferencias, y los reimprime. Si en Datos del negocio está activo el «cierre ciego», solo quien tiene este permiso ve el efectivo esperado antes de contar; los demás cuentan sin saber cuánto debería haber.',
+        'caja.turno_compartido' => 'Para varios meseros con su propia tablet y una sola caja: si otra persona ya abrió el turno, puede vender, cobrar mesas, recibir abonos y registrar gastos o movimientos en ese turno sin abrir el suyo. Todo el dinero cae al turno de quien lo abrió (y en su cierre y arqueo), pero cada venta guarda quién la cobró, y el cierre muestra las ventas por empleado. Sin el permiso, si el turno es de otro solo puede cerrarlo para abrir el propio.',
         'caja.reabrir' => 'Reabre un turno ya cerrado (por ejemplo, si se contó mal) con un motivo obligatorio que queda en Auditoría. No se puede si la caja ya tiene otro turno abierto.',
 
         'productos.ver' => 'Ve el catálogo de productos con su clase, precio, costo y existencia, y lo busca por nombre o código de barras. Solo consulta: no puede crear ni editar.',

@@ -174,7 +174,7 @@ class TurnoApiController extends Controller
 
         // Turno de otra persona que se fue sin cerrarlo: solo se puede cerrar (ver CajaService::exigirTurnoPropio)
         $usuario = $request->user();
-        $ajeno = $turno && (int) $turno->usuario_apertura_id !== (int) $usuario->id && !$usuario->hasRole('admin');
+        $ajeno = $turno && !CajaService::puedeOperarEn($turno, $usuario);
 
         return response()->json([
             'success'     => 1,
@@ -402,10 +402,11 @@ class TurnoApiController extends Controller
     {
         $usuario = $request->user();
 
-        // Sin permiso de historial, solo los turnos que el usuario abrió o cerró
+        // Sin permiso de historial, solo los turnos que el usuario abrió o cerró, o el abierto que comparte
         if (!$usuario->can('caja.historial')
             && $turno->usuario_apertura_id !== $usuario->id
-            && $turno->usuario_cierre_id !== $usuario->id) {
+            && $turno->usuario_cierre_id !== $usuario->id
+            && !($turno->estaAbierto() && CajaService::puedeOperarEn($turno, $usuario))) {
             return response()->json(['success' => false, 'status' => 'FORBIDDEN', 'message' => 'No tienes permisos para ver este turno.'], 403);
         }
 

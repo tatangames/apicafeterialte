@@ -15,7 +15,8 @@ use Database\Seeders\UnidadesMedidaSeeder;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
-// Un mesero se fue sin cerrar su turno: el siguiente solo puede cerrarlo y abrir el suyo
+// Sin «caja.turno_compartido» (rol de prueba cajero), el turno de otro solo se puede cerrar.
+// El mesero sí lo tiene: varios meseros con su tablet cobran en el turno de quien abrió la caja.
 class TurnoAjenoTest extends TestCase
 {
     private Caja $caja;
@@ -49,9 +50,9 @@ class TurnoAjenoTest extends TestCase
         ], $extra));
     }
 
-    public function test_otro_mesero_no_vende_ni_mueve_dinero_en_el_turno_ajeno(): void
+    public function test_sin_permiso_no_vende_ni_mueve_dinero_en_el_turno_ajeno(): void
     {
-        $this->actuarComo('mesero');
+        $this->actuarComo('cajero');
 
         $this->vender()->assertStatus(422)
             ->assertJsonPath('message', 'La caja tiene abierto el turno de Mesero 1. Ciérralo y abre el tuyo para seguir.');
@@ -65,7 +66,7 @@ class TurnoAjenoTest extends TestCase
 
     public function test_turno_actual_avisa_que_es_ajeno(): void
     {
-        $this->actuarComo('mesero');
+        $this->actuarComo('cajero');
 
         $this->getJson("/api/caja/turno-actual?caja_id={$this->caja->id}")->assertOk()
             ->assertJsonPath('turno_ajeno', true)
@@ -74,7 +75,7 @@ class TurnoAjenoTest extends TestCase
 
     public function test_puede_cerrar_el_turno_ajeno_y_abrir_el_suyo(): void
     {
-        $mesero2 = $this->actuarComo('mesero', ['nombre' => 'Mesero 2']);
+        $mesero2 = $this->actuarComo('cajero', ['nombre' => 'Mesero 2']);
 
         $this->postJson("/api/caja/turnos/{$this->turno->id}/cerrar", ['efectivo_contado' => 20])->assertOk()
             ->assertJsonPath('turno.usuario_apertura', 'Mesero 1')
@@ -109,5 +110,25 @@ class TurnoAjenoTest extends TestCase
             'pagos'              => [['metodo_pago_id' => MetodoPago::where('nombre', 'Efectivo')->value('id'), 'monto' => 1]],
         ]]])->assertOk();
         $this->assertSame(1, Venta::count());
+    }
+
+    public function test_otros_meseros_cobran_en_el_turno_de_quien_abrio(): void
+    {
+        $mesero2 = $this->actuarComo('mesero', ['nombre' => 'Mesero 2']);
+        $this->getJson("/api/caja/turno-actual?caja_id={$this->caja->id}")->assertOk()
+            ->assertJsonPath('turno_ajeno', false)
+            ->assertJsonPath('turno.usuario_apertura', 'Mesero 1');
+        $this->vender()->assertCreated();
+        $this->getJson("/api/caja/turnos/{$this->turno->id}")->assertOk();
+
+        $mesero3 = $this->actuarComo('mesero', ['nombre' => 'Mesero 3']);
+        $this->vender()->assertCreated();
+        $this->vender()->assertCreated();
+
+        // Todo cae al turno de Mesero 1, pero cada venta guarda quién la cobró
+        $this->assertSame(3, Venta::where('turno_id', $this->turno->id)->count());
+        $this->assertSame(1, Venta::where('usuario_id', $mesero2->id)->count());
+        $this->assertSame(2, Venta::where('usuario_id', $mesero3->id)->count());
+        $this->assertSame(1, TurnoCaja::where('estado', 'abierto')->count());
     }
 }

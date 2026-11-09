@@ -21,20 +21,28 @@ class CajaService
      * Si la caja tiene abierto el turno de otro (se fue sin cerrarlo), primero hay
      * que cerrarlo: así no se mezclan ventas ni efectivo de dos personas.
      * Cerrar y hacer arqueo sí se permite, es la forma de salir de ese estado.
-     * El admin puede operar en cualquier turno (ayuda en horas pico).
+     * El admin, y quien tenga «caja.turno_compartido» (varios meseros con su tablet
+     * cobrando en el turno de quien abrió la caja), pueden operar en cualquier turno.
      */
     public static function exigirTurnoPropio(TurnoCaja $turno): void
     {
-        $usuario = auth()->user();
-        if (!$usuario || (int) $turno->usuario_apertura_id === (int) $usuario->id) {
-            return;
-        }
-        if (method_exists($usuario, 'hasRole') && $usuario->hasRole('admin')) {
+        if (self::puedeOperarEn($turno, auth()->user())) {
             return;
         }
 
         $de = $turno->usuarioApertura?->nombre ?? 'otro usuario';
         throw new NegocioException("La caja tiene abierto el turno de {$de}. Ciérralo y abre el tuyo para seguir.");
+    }
+
+    /** Si el usuario puede vender y registrar dinero en ese turno (el suyo, o el de otro con permiso). */
+    public static function puedeOperarEn(TurnoCaja $turno, $usuario): bool
+    {
+        if (!$usuario || (int) $turno->usuario_apertura_id === (int) $usuario->id) {
+            return true;
+        }
+
+        // can() pasa siempre para el admin (Gate::before)
+        return method_exists($usuario, 'can') && $usuario->can('caja.turno_compartido');
     }
 
     /**

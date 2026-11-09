@@ -31,13 +31,11 @@ class AppServiceProvider extends ServiceProvider
             return method_exists($user, 'hasRole') && $user->hasRole('admin') ? true : null;
         });
 
-        // Intentos de inicio de sesión: por correo + IP
-        RateLimiter::for('login', function (Request $request) {
-            return Limit::perMinute(5)->by(mb_strtolower((string) $request->input('email')) . '|' . $request->ip());
-        });
-
-        // Entrar con PIN desde una tablet registrada: por IP (además del límite por tablet)
-        RateLimiter::for('login-pin', fn (Request $request) => Limit::perMinute(10)->by($request->ip()));
+        // Inicio de sesión (correo o PIN): solo un freno contra inundaciones por IP, que el uso
+        // normal nunca alcanza (varias tablets del local salen por la misma IP). Los intentos
+        // FALLIDOS se limitan en el controlador: 25 seguidos y hay que esperar un minuto
+        RateLimiter::for('login', fn (Request $request) => Limit::perMinute(60)->by($request->ip()));
+        RateLimiter::for('login-pin', fn (Request $request) => Limit::perMinute(60)->by($request->ip()));
 
         // La llave de una tablet registrada solo sirve para entrar con PIN, no como sesión
         Sanctum::authenticateAccessTokensUsing(

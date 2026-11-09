@@ -86,7 +86,7 @@ class LoginTest extends TestCase
     {
         $this->crearUsuario('cajero', ['email' => 'cajero@test.com']);
 
-        for ($i = 0; $i < 5; $i++) {
+        for ($i = 0; $i < 25; $i++) {
             $this->postJson('/api/login', ['email' => 'cajero@test.com', 'password' => 'mala'])->assertStatus(401);
         }
 

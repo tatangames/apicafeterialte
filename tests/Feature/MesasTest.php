@@ -912,7 +912,7 @@ class MesasTest extends TestCase
         $this->postJson('/api/me/desbloquear', ['codigo' => 'secreto123'])->assertOk();
 
         // Cinco intentos fallidos seguidos y espera
-        for ($i = 0; $i < 5; $i++) {
+        for ($i = 0; $i < 25; $i++) {
             $this->postJson('/api/me/desbloquear', ['codigo' => '0000']);
         }
         $this->postJson('/api/me/desbloquear', ['codigo' => '4321'])->assertStatus(429)->assertJsonStructure(['segundos']);

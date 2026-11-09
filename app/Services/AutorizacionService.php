@@ -11,6 +11,9 @@ class AutorizacionService
 {
     private const INTENTOS = 5;
 
+    /** PIN o contraseña incorrectos seguidos para entrar o desbloquear antes de esperar un minuto. */
+    public const INTENTOS_ENTRAR = 25;
+
     /** Nombre del token que registra una tablet de confianza (para entrar con PIN en el inicio de sesión). */
     public const LLAVE_TABLET = 'tablet-dispositivo';
 

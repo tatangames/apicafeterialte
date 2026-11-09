@@ -51,8 +51,9 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
 
     Route::get('/me', [AuthApiController::class, 'me']);
     Route::put('/me/pin', [AuthApiController::class, 'cambiarPin'])->middleware('throttle:10,1');
-    Route::post('/me/desbloquear', [AuthApiController::class, 'desbloquear'])->middleware('throttle:20,1');
-    Route::post('/me/cambiar-usuario', [AuthApiController::class, 'cambiarUsuario'])->middleware('throttle:20,1');
+    // Sin límite por minuto: solo cuentan los PIN incorrectos (25 seguidos → esperar un minuto)
+    Route::post('/me/desbloquear', [AuthApiController::class, 'desbloquear']);
+    Route::post('/me/cambiar-usuario', [AuthApiController::class, 'cambiarUsuario']);
 
     Route::get('/datos', [DashboardApiController::class, 'datos']);
 
@@ -228,7 +229,7 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
     Route::middleware('permission:pos.vender')->group(function () {
         Route::get('/pos/catalogo', [PosApiController::class, 'catalogo']);
         Route::get('/pos/ping', [SyncApiController::class, 'ping']);
-        Route::post('/pos/sync', [SyncApiController::class, 'ventas'])->middleware('throttle:60,1');
+        Route::post('/pos/sync', [SyncApiController::class, 'ventas']);
         Route::post('/pos/ventas', [VentaApiController::class, 'store']);
         // Anular y devolver: el permiso se valida en el servicio
         Route::post('/pos/ventas/{venta}/anular', [VentaApiController::class, 'anular']);
@@ -248,7 +249,7 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
     // caja.abrir_cajon se revisa en el controlador: sin él se pide el PIN de quien lo tenga
     Route::post('/impresion/cajon', [ImpresionApiController::class, 'cajon'])->middleware('permission:caja.movimientos|pos.vender');
     // La tablet que imprime (servidor en la nube): toma la cola y reporta el resultado
-    Route::post('/impresion/cola/tomar', [ImpresionApiController::class, 'tomarCola'])->middleware(['permission:pos.vender|pos.precuentas', 'throttle:120,1']);
+    Route::post('/impresion/cola/tomar', [ImpresionApiController::class, 'tomarCola'])->middleware('permission:pos.vender|pos.precuentas');
     Route::post('/impresion/trabajos/{trabajo}/resultado', [ImpresionApiController::class, 'resultadoDispositivo'])->middleware('permission:pos.vender|pos.precuentas');
     Route::get('/impresion/trabajos', [ImpresionApiController::class, 'trabajos'])->middleware('permission:impresoras.gestionar');
     Route::delete('/impresion/trabajos', [ImpresionApiController::class, 'eliminarErrores'])->middleware('permission:impresoras.gestionar');

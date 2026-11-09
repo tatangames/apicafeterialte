@@ -57,11 +57,25 @@ class LoginPinTest extends TestCase
         $this->postJson('/api/login-pin', ['dispositivo' => 'cualquiera', 'pin' => '1111'])->assertUnauthorized();
     }
 
+    public function test_muchas_entradas_correctas_seguidas_no_se_bloquean(): void
+    {
+        $llave = $this->registrarTablet();
+
+        // Meseros turnándose la tablet: solo cuentan los PIN incorrectos
+        foreach (range(1, 20) as $n) {
+            $this->postJson('/api/login-pin', ['dispositivo' => $llave, 'pin' => $n % 2 ? '1111' : '2222'])->assertOk();
+            $this->app['auth']->forgetGuards();
+        }
+        foreach (range(1, 8) as $_) {
+            $this->postJson('/api/login', ['email' => $this->mesero2->email, 'password' => 'secreto123'])->assertOk();
+        }
+    }
+
     public function test_pin_incorrecto_y_bloqueo_por_intentos(): void
     {
         $llave = $this->registrarTablet();
 
-        foreach (range(1, 5) as $_) {
+        foreach (range(1, 25) as $_) {
             $this->postJson('/api/login-pin', ['dispositivo' => $llave, 'pin' => '0000'])->assertStatus(422);
         }
         $this->postJson('/api/login-pin', ['dispositivo' => $llave, 'pin' => '2222'])->assertStatus(429);

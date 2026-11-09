@@ -54,9 +54,9 @@ class CambioUsuarioTest extends TestCase
         $this->assertSame(1, $this->mesero1->tokens()->count());
     }
 
-    public function test_bloquea_tras_cinco_intentos_fallidos(): void
+    public function test_bloquea_tras_25_intentos_fallidos(): void
     {
-        foreach (range(1, 5) as $_) {
+        foreach (range(1, 25) as $_) {
             $this->cambiar('0000')->assertStatus(422);
         }
         $this->cambiar('2222')->assertStatus(429)->assertJsonStructure(['segundos']);

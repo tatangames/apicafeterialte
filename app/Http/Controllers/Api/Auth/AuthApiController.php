@@ -75,7 +75,7 @@ class AuthApiController extends Controller
 
         $user = $request->user();
         $clave = 'desbloquear:' . $user->id;
-        if (RateLimiter::tooManyAttempts($clave, 5)) {
+        if (RateLimiter::tooManyAttempts($clave, AutorizacionService::INTENTOS_ENTRAR)) {
             $segundos = RateLimiter::availableIn($clave);
             return response()->json(['success' => false, 'message' => "Demasiados intentos. Espera {$segundos} segundos.", 'segundos' => $segundos], 429);
         }
@@ -106,7 +106,7 @@ class AuthApiController extends Controller
         $token = $actual->currentAccessToken();
         // Por dispositivo: el límite no se reinicia al cambiar de persona
         $clave = 'cambiar_usuario:' . ($token instanceof PersonalAccessToken ? $token->id : $actual->id);
-        if (RateLimiter::tooManyAttempts($clave, 5)) {
+        if (RateLimiter::tooManyAttempts($clave, AutorizacionService::INTENTOS_ENTRAR)) {
             $segundos = RateLimiter::availableIn($clave);
             return response()->json(['success' => false, 'message' => "Demasiados intentos. Espera {$segundos} segundos.", 'segundos' => $segundos], 429);
         }

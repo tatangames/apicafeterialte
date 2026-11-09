@@ -25,11 +25,24 @@ class LoginApiController extends Controller
             'password' => 'required',
         ]);
 
+        // Solo cuentan los intentos fallidos: 25 seguidos con ese correo desde esa IP y hay que esperar
+        $clave = 'login:' . mb_strtolower((string) $request->email) . '|' . $request->ip();
+        if (RateLimiter::tooManyAttempts($clave, AutorizacionService::INTENTOS_ENTRAR)) {
+            $segundos = RateLimiter::availableIn($clave);
+            return response()->json([
+                'success'  => false,
+                'status'   => 'TOO_MANY_ATTEMPTS',
+                'message'  => "Demasiados intentos fallidos. Espera {$segundos} segundos.",
+                'segundos' => $segundos,
+            ], 429);
+        }
+
         $user = Administrador::where('email', $request->email)->first();
 
         // Mismo mensaje si el correo no existe o la contraseña es incorrecta,
         // para no revelar qué correos están registrados
         if (!$user || !Hash::check($request->password, $user->password)) {
+            RateLimiter::hit($clave, 60);
             AuditoriaService::registrar('auth', 'login_fallido', $user, null, null, 'Correo: ' . $request->email, $user?->id);
 
             return response()->json([
@@ -38,6 +51,8 @@ class LoginApiController extends Controller
                 'message' => 'Correo o contraseña incorrectos.',
             ], 401);
         }
+
+        RateLimiter::clear($clave);
 
         if (!$user->estado) {
             return response()->json([
@@ -94,7 +109,7 @@ class LoginApiController extends Controller
         }
 
         $clave = 'login_pin:' . $llave->id;
-        if (RateLimiter::tooManyAttempts($clave, 5)) {
+        if (RateLimiter::tooManyAttempts($clave, AutorizacionService::INTENTOS_ENTRAR)) {
             $segundos = RateLimiter::availableIn($clave);
             return response()->json(['success' => false, 'message' => "Demasiados intentos. Espera {$segundos} segundos.", 'segundos' => $segundos], 429);
         }

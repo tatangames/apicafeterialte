@@ -58,7 +58,7 @@
 <div class="email-container">
     <div class="header">
         <img
-            src="{{ secure_asset('images/logoe.jpg') }}"
+            src="{{ $logoUrl }}"
             alt="Panaderia Eduardo"
             class="logo"
         >

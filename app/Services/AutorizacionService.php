@@ -11,6 +11,9 @@ class AutorizacionService
 {
     private const INTENTOS = 5;
 
+    /** Nombre del token que registra una tablet de confianza (para entrar con PIN en el inicio de sesión). */
+    public const LLAVE_TABLET = 'tablet-dispositivo';
+
     /**
      * Devuelve quién autoriza una operación que exige $permiso:
      * - el propio usuario si tiene el permiso;
@@ -53,6 +56,13 @@ class AutorizacionService
 
         return $candidatos->first(fn (Administrador $a) => $a->pin && Hash::check($codigo, $a->pin))
             ?? $candidatos->first(fn (Administrador $a) => Hash::check($codigo, $a->password));
+    }
+
+    /** El usuario activo dueño de ese PIN (no se repite entre usuarios), o null. */
+    public static function usuarioPorPin(string $pin): ?Administrador
+    {
+        return Administrador::where('estado', true)->whereNotNull('pin')->get()
+            ->first(fn (Administrador $a) => Hash::check($pin, $a->pin));
     }
 
     /** ¿Otro usuario ya usa ese PIN? El PIN identifica a quien autoriza, no se puede repetir. */

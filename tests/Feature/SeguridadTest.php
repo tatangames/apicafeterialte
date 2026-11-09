@@ -10,7 +10,7 @@ use Tests\TestCase;
 class SeguridadTest extends TestCase
 {
     // Rutas sin sesión: inicio de sesión y recuperación de contraseña (todas con límite de intentos)
-    const PUBLICAS = ['api/login', 'api/validate-reset-token', 'api/reset-password-confirm', 'api/admin/enviar/correo/password'];
+    const PUBLICAS = ['api/login', 'api/login-pin', 'api/validate-reset-token', 'api/reset-password-confirm', 'api/admin/enviar/correo/password'];
 
     // Con sesión pero sin permiso específico, a propósito: cualquier usuario las necesita
     const SOLO_SESION = [

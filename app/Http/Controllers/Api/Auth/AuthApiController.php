@@ -111,8 +111,7 @@ class AuthApiController extends Controller
             return response()->json(['success' => false, 'message' => "Demasiados intentos. Espera {$segundos} segundos.", 'segundos' => $segundos], 429);
         }
 
-        $nuevo = Administrador::where('estado', true)->whereNotNull('pin')->get()
-            ->first(fn (Administrador $a) => Hash::check($pin, $a->pin));
+        $nuevo = AutorizacionService::usuarioPorPin($pin);
         if (!$nuevo) {
             RateLimiter::hit($clave, 60);
             return response()->json(['success' => false, 'message' => 'PIN incorrecto'], 422);

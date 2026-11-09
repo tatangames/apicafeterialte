@@ -12,6 +12,9 @@ use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Facades\Validator;
 use App\Services\AuditoriaService;
+use App\Services\AutorizacionService;
+use Illuminate\Support\Facades\RateLimiter;
+use Laravel\Sanctum\PersonalAccessToken;
 
 class LoginApiController extends Controller
 {
@@ -55,11 +58,65 @@ class LoginApiController extends Controller
 
         AuditoriaService::registrar('auth', 'login', $user, null, ['dispositivo' => $deviceName], null, $user->id);
 
+        // Primera vez en una tablet: queda registrada y desde ahí se puede entrar con PIN
+        $llave = $deviceName === 'tablet-meseros' && $request->boolean('registrar_dispositivo')
+            ? $user->createToken(AutorizacionService::LLAVE_TABLET)->plainTextToken
+            : null;
+
         return response()->json([
             'success' => true,
             'message' => 'Inicio de sesión exitoso.',
             'user' => $user,
             'token' => $token,
+            'token_type' => 'Bearer',
+        ] + ($llave ? ['dispositivo' => $llave] : []));
+    }
+
+    /**
+     * POST /login-pin {dispositivo, pin}: en una tablet ya registrada (alguien entró antes con
+     * correo y contraseña), cada usuario entra solo con su PIN. Sin la llave de la tablet no se
+     * acepta: así no se pueden probar PINs desde cualquier lugar.
+     */
+    public function loginPin(Request $request)
+    {
+        $llave = PersonalAccessToken::findToken((string) $request->input('dispositivo'));
+        if (!$llave || $llave->name !== AutorizacionService::LLAVE_TABLET || !$llave->tokenable?->estado) {
+            return response()->json([
+                'success' => false,
+                'status'  => 'DISPOSITIVO_NO_REGISTRADO',
+                'message' => 'Esta tablet ya no está registrada: entra con tu correo y contraseña.',
+            ], 401);
+        }
+
+        $pin = trim((string) $request->input('pin'));
+        if ($pin === '') {
+            return response()->json(['success' => false, 'message' => 'Escribe tu PIN'], 422);
+        }
+
+        $clave = 'login_pin:' . $llave->id;
+        if (RateLimiter::tooManyAttempts($clave, 5)) {
+            $segundos = RateLimiter::availableIn($clave);
+            return response()->json(['success' => false, 'message' => "Demasiados intentos. Espera {$segundos} segundos.", 'segundos' => $segundos], 429);
+        }
+
+        $user = AutorizacionService::usuarioPorPin($pin);
+        if (!$user) {
+            RateLimiter::hit($clave, 60);
+            return response()->json(['success' => false, 'message' => 'PIN incorrecto'], 422);
+        }
+        RateLimiter::clear($clave);
+
+        $token = $user->createToken('tablet-meseros')->plainTextToken;
+        $user->forceFill(['ultimo_acceso' => now()])->save();
+        $llave->forceFill(['last_used_at' => now()])->save();
+
+        AuditoriaService::registrar('auth', 'login', $user, null, ['dispositivo' => 'tablet-meseros', 'metodo' => 'pin'], null, $user->id);
+
+        return response()->json([
+            'success'    => true,
+            'message'    => 'Inicio de sesión exitoso.',
+            'user'       => $user,
+            'token'      => $token,
             'token_type' => 'Bearer',
         ]);
     }

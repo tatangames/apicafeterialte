@@ -37,6 +37,7 @@ use App\Http\Controllers\Api\Notificaciones\NotificacionApiController;
 
 
 Route::post('/login', [LoginApiController::class, 'login'])->middleware('throttle:login');
+Route::post('/login-pin', [LoginApiController::class, 'loginPin'])->middleware('throttle:login-pin');
 
 Route::middleware('throttle:10,1')->group(function () {
     Route::post('/validate-reset-token', [LoginApiController::class, 'validateResetToken']);

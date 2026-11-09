@@ -32,6 +32,7 @@ return new class extends Migration
             $table->decimal('descuento_max_sin_autorizacion', 5, 2)->default(0);
             $table->boolean('cierre_ciego')->default(false); // el cajero cuenta sin ver cuánto debería haber
             $table->boolean('aviso_cambio')->default(true);  // al cobrar, avisa si el cambio no alcanza en la gaveta
+            $table->boolean('ticket_por_comprar')->default(true); // el ticket de cierre de turno imprime la sección «POR COMPRAR»
             $table->string('mensaje_ticket', 500)->nullable();
             $table->timestamps();
         });

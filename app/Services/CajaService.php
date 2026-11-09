@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Exceptions\NegocioException;
 use App\Models\ArqueoCaja;
 use App\Models\Caja;
+use App\Models\ConfiguracionNegocio;
 use App\Models\MetodoPago;
 use App\Models\MovimientoCaja;
 use App\Models\MovimientoInventario;
@@ -386,6 +387,8 @@ class CajaService
             'por_comprar'        => !$turno->estaAbierto() && isset($turno->resumen['por_comprar'])
                 ? $turno->resumen['por_comprar']
                 : InventarioService::productosEnAlerta(),
+            // Datos del negocio: si el ticket de cierre imprime «POR COMPRAR» (la pantalla la muestra siempre)
+            'ticket_por_comprar' => (bool) ConfiguracionNegocio::actual()->ticket_por_comprar,
             'efectivo_esperado'  => round($efectivoEsperado, 2),
             'por_tipo'           => $porTipo,
             'por_metodo'         => $porMetodo->all(),

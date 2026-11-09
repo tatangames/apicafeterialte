@@ -363,6 +363,34 @@ class RecetasVentaTest extends TestCase
             ->assertJsonPath('por_comprar.0.producto', 'Limón');
     }
 
+    public function test_el_ticket_de_cierre_puede_omitir_por_comprar(): void
+    {
+        $this->actuarComo('admin');
+        $this->receta($this->limonada, [[$this->limon, 'Unidad', 4]])->assertCreated();
+        $this->vender([[$this->limonada, 3]], 3)->assertCreated(); // el limón queda bajo su mínimo
+        $cerrado = CajaService::cerrar($this->turno, null, 23, auth()->id());
+        $impresora = \App\Models\Impresora::create([
+            'alias' => 'Mostrador', 'conexion' => 'red', 'ip_impresora' => '192.168.1.50', 'puerto' => 9100,
+            'tipo_impresion' => 'escpos', 'ancho_caracteres' => 48, 'uso' => 'ticket', 'cash_drawer' => 'pin2', 'activo' => true,
+        ]);
+        $ticket = fn () => \App\Services\ImpresionService::cierre($cerrado->fresh(), $impresora)->bytes();
+
+        // Por defecto el ticket imprime la lista
+        $this->assertStringContainsString('POR COMPRAR', $ticket());
+        $this->assertStringContainsString('hay 18 u', $ticket()); // Limón (el ticket va en la página de códigos de la impresora)
+
+        // Apagado en Datos del negocio: el ticket ya no la imprime, pero la pantalla la sigue mostrando
+        $this->postJson('/api/configuracion/negocio', [
+            'nombre' => 'Panadería Eduardo', 'moneda' => 'USD', 'simbolo_moneda' => '$', 'permitir_stock_negativo' => true,
+            'ticket_por_comprar' => false,
+        ])->assertOk()->assertJsonPath('data.ticket_por_comprar', false);
+
+        $this->assertStringNotContainsString('POR COMPRAR', $ticket());
+        $resumen = CajaService::resumen($cerrado->fresh());
+        $this->assertFalse($resumen['ticket_por_comprar']);
+        $this->assertSame('Limón', $resumen['por_comprar'][0]['producto']);
+    }
+
     public function test_frijoles_crudos_en_libras_rinden_porciones_cocidas(): void
     {
         $this->actuarComo('admin');

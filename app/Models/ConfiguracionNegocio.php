@@ -25,6 +25,7 @@ class ConfiguracionNegocio extends Model
         'descuento_max_sin_autorizacion',
         'cierre_ciego',
         'aviso_cambio',
+        'ticket_por_comprar',
         'mensaje_ticket',
     ];
 
@@ -33,6 +34,7 @@ class ConfiguracionNegocio extends Model
         'descuento_max_sin_autorizacion' => 'decimal:2',
         'cierre_ciego'                   => 'boolean',
         'aviso_cambio'                   => 'boolean',
+        'ticket_por_comprar'             => 'boolean',
     ];
 
     /**

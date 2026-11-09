@@ -41,6 +41,7 @@ class NegocioApiController extends Controller
             'descuento_max_sin_autorizacion' => 'nullable|numeric|min:0|max:100',
             'cierre_ciego'            => 'nullable|boolean',
             'aviso_cambio'            => 'nullable|boolean',
+            'ticket_por_comprar'      => 'nullable|boolean',
             'mensaje_ticket'          => 'nullable|string|max:500',
         ], [
             'nombre.required'         => 'El nombre del negocio es requerido',
@@ -72,7 +73,7 @@ class NegocioApiController extends Controller
             }
 
             // Normalizar booleanos que llegan como string desde multipart
-            foreach (['permitir_stock_negativo', 'cierre_ciego', 'aviso_cambio'] as $campo) {
+            foreach (['permitir_stock_negativo', 'cierre_ciego', 'aviso_cambio', 'ticket_por_comprar'] as $campo) {
                 if (array_key_exists($campo, $datos)) {
                     $datos[$campo] = filter_var($datos[$campo], FILTER_VALIDATE_BOOLEAN);
                 }

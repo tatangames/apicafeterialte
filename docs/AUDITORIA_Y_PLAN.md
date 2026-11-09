@@ -252,7 +252,7 @@ Frontend:
 2. **Facturación electrónica (DTE del Ministerio de Hacienda de El Salvador).** ¿Se necesita emitir DTE o basta con el ticket interno? Si se necesita, conviene agregar un módulo aparte antes de salir a producción.
 3. **IVA.** ¿Los precios de venta ya incluyen el 13 %? (Propuesta: sí, y el ticket desglosa el impuesto.)
 4. **Stock negativo.** ¿Se permite vender pan que todavía no se registró como producido? (Propuesta: permitir con alerta, configurable.)
-5. **Número de cajas** y si cada cajero usa su propio usuario o se comparte una tablet con cambio rápido por PIN.
+5. **Número de cajas** y si cada cajero usa su propio usuario o se comparte una tablet con cambio rápido por PIN. *(Resuelto 2026-11-08: una sola caja física, «Caja principal»; cada mesero entra con su usuario y abre su turno. Si alguien se va sin cerrar, el siguiente cierra ese turno con arqueo y abre el suyo. El sistema admite varias cajas si un día hay otra gaveta con su propio dispositivo.)*
 
 ---
 

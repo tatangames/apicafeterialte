@@ -686,14 +686,17 @@ class ImpresionService
             $doc->separador()->parrafo("Obs.: {$turno->observaciones_cierre}");
         }
 
-        // Lo que el siguiente turno tiene que comprar: solo lo que quedó en su mínimo o debajo
-        $cantidad = fn ($v, $u) => rtrim(rtrim(number_format((float) $v, 2, '.', ''), '0'), '.') . ($u ? " {$u}" : '');
-        $doc->separador()->negrita()->linea('POR COMPRAR')->normal();
-        if (!$resumen['por_comprar']) {
-            $doc->linea('Nada bajo el mínimo');
-        }
-        foreach ($resumen['por_comprar'] as $p) {
-            $doc->columnas($p['producto'], 'hay ' . $cantidad($p['stock_actual'], $p['unidad']) . ' / mín ' . $cantidad($p['stock_minimo'], null));
+        // Lo que el siguiente turno tiene que comprar: solo lo que quedó en su mínimo o debajo.
+        // Se puede apagar en Datos del negocio (la lista sigue en pantalla y en Control de existencias).
+        if ($negocio->ticket_por_comprar) {
+            $cantidad = fn ($v, $u) => rtrim(rtrim(number_format((float) $v, 2, '.', ''), '0'), '.') . ($u ? " {$u}" : '');
+            $doc->separador()->negrita()->linea('POR COMPRAR')->normal();
+            if (!$resumen['por_comprar']) {
+                $doc->linea('Nada bajo el mínimo');
+            }
+            foreach ($resumen['por_comprar'] as $p) {
+                $doc->columnas($p['producto'], 'hay ' . $cantidad($p['stock_actual'], $p['unidad']) . ' / mín ' . $cantidad($p['stock_minimo'], null));
+            }
         }
 
         $mitad = intdiv($impresora->ancho_caracteres, 2) - 2;

@@ -10,6 +10,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Validator;
+use Laravel\Sanctum\PersonalAccessToken;
 
 class AuthApiController extends Controller
 {
@@ -87,6 +88,56 @@ class AuthApiController extends Controller
 
         RateLimiter::clear($clave);
         return response()->json(['success' => 1]);
+    }
+
+    /**
+     * POST /me/cambiar-usuario {pin}: en la tablet bloqueada, quien escribe su PIN entra con su
+     * propia sesión sin correo ni contraseña (una sola tablet para varios meseros). El PIN no se
+     * repite entre usuarios, así que identifica a la persona. La sesión anterior se cierra.
+     */
+    public function cambiarUsuario(Request $request)
+    {
+        $pin = trim((string) $request->input('pin'));
+        if ($pin === '') {
+            return response()->json(['success' => false, 'message' => 'Escribe tu PIN'], 422);
+        }
+
+        $actual = $request->user();
+        $token = $actual->currentAccessToken();
+        // Por dispositivo: el límite no se reinicia al cambiar de persona
+        $clave = 'cambiar_usuario:' . ($token instanceof PersonalAccessToken ? $token->id : $actual->id);
+        if (RateLimiter::tooManyAttempts($clave, 5)) {
+            $segundos = RateLimiter::availableIn($clave);
+            return response()->json(['success' => false, 'message' => "Demasiados intentos. Espera {$segundos} segundos.", 'segundos' => $segundos], 429);
+        }
+
+        $nuevo = Administrador::where('estado', true)->whereNotNull('pin')->get()
+            ->first(fn (Administrador $a) => Hash::check($pin, $a->pin));
+        if (!$nuevo) {
+            RateLimiter::hit($clave, 60);
+            return response()->json(['success' => false, 'message' => 'PIN incorrecto'], 422);
+        }
+        RateLimiter::clear($clave);
+
+        // La misma persona: solo desbloquea
+        if ($nuevo->id === $actual->id) {
+            return response()->json(['success' => 1, 'cambio' => false, 'usuario_id' => $actual->id]);
+        }
+
+        $dispositivo = $token instanceof PersonalAccessToken ? $token->name : 'tablet-meseros';
+        $horas = (int) config('sanctum.horas_sesion_web', 12);
+        $vence = $dispositivo === 'tablet-meseros' || $horas <= 0 ? null : now()->addHours($horas);
+        $plano = $nuevo->createToken($dispositivo, ['*'], $vence)->plainTextToken;
+
+        if ($token instanceof PersonalAccessToken) {
+            $token->delete();
+        }
+        $nuevo->forceFill(['ultimo_acceso' => now()])->save();
+
+        AuditoriaService::registrar('auth', 'cambio_usuario', $nuevo, null,
+            ['dispositivo' => $dispositivo, 'antes' => $actual->nombre], null, $nuevo->id);
+
+        return response()->json(['success' => 1, 'cambio' => true, 'usuario_id' => $nuevo->id, 'token' => $plano]);
     }
 
     // DELETE /admin/usuarios/{usuario}/pin: el administrador borra el PIN de quien lo olvidó;

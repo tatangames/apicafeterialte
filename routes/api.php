@@ -51,6 +51,7 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
     Route::get('/me', [AuthApiController::class, 'me']);
     Route::put('/me/pin', [AuthApiController::class, 'cambiarPin'])->middleware('throttle:10,1');
     Route::post('/me/desbloquear', [AuthApiController::class, 'desbloquear'])->middleware('throttle:20,1');
+    Route::post('/me/cambiar-usuario', [AuthApiController::class, 'cambiarUsuario'])->middleware('throttle:20,1');
 
     Route::get('/datos', [DashboardApiController::class, 'datos']);
 

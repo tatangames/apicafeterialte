@@ -304,6 +304,10 @@ class MesasTest extends TestCase
         $this->agregar($orden2, [['producto_id' => $this->pan->id, 'cantidad' => 1]])
             ->assertStatus(422)->assertJsonPath('message', 'No hay existencia de Pan francés');
 
+        // El botón «+» de la línea también respeta lo que queda
+        $this->putJson("/api/mesas/items/{$item}", ['cantidad' => 3])
+            ->assertStatus(422)->assertJsonPath('message', 'Solo quedan 2 de Pan francés');
+
         // Si el negocio permite vender sin existencia, se acepta
         \App\Models\ConfiguracionNegocio::actual()->update(['permitir_stock_negativo' => true]);
         $this->agregar($orden2, [['producto_id' => $this->pan->id, 'cantidad' => 1]])->assertOk();

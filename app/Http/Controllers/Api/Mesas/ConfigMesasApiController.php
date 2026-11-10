@@ -34,6 +34,8 @@ class ConfigMesasApiController extends Controller
                 ...$t->only(['id', 'nombre', 'tipo', 'zona', 'capacidad', 'orden', 'caja_id', 'activo']),
                 'caja'    => $t->caja?->nombre,
                 'ocupada' => Orden::where('terminal_id', $t->id)->where('estado', 'abierta')->exists(),
+                // Con alguna orden (abierta, cobrada o anulada) ya no se borra: se desactiva
+                'usada'   => Orden::where('terminal_id', $t->id)->exists(),
             ]),
             'zonas'      => Terminal::whereNotNull('zona')->distinct()->orderBy('zona')->pluck('zona'),
         ]);
@@ -79,6 +81,23 @@ class ConfigMesasApiController extends Controller
         return $this->guardarTerminal($request, $id);
     }
 
+    // DELETE /mesas/config/terminales/{id}: solo si nunca tuvo una orden (si no, se desactiva)
+    public function borrarTerminal(int $id)
+    {
+        $terminal = Terminal::findOrFail($id);
+
+        if (Orden::where('terminal_id', $terminal->id)->exists()) {
+            return response()->json(['success' => 0, 'status' => 'BUSINESS_RULE',
+                'message' => "No se puede borrar «{$terminal->nombre}»: ya tiene órdenes. Desactívala en su lugar."], 422);
+        }
+
+        $antes = $terminal->toArray();
+        $terminal->delete();
+        AuditoriaService::registrar('mesas', 'borrar_terminal', $terminal, $antes, null, $terminal->nombre);
+
+        return response()->json(['success' => 1, 'message' => "Terminal {$terminal->nombre} borrada"]);
+    }
+
     // PUT /mesas/config/terminales/orden {ids: [...]} en el orden en que deben aparecer
     public function ordenarTerminales(Request $request)
     {
@@ -106,7 +125,9 @@ class ConfigMesasApiController extends Controller
     {
         return response()->json([
             'success'    => 1,
-            'areas'      => AreaPreparacion::orderBy('nombre')->get(['id', 'nombre', 'color', 'impresora_id', 'activo']),
+            'areas'      => AreaPreparacion::orderBy('nombre')->get(['id', 'nombre', 'color', 'impresora_id', 'activo'])
+                // Con comandas o productos pedidos ya no se borra: se desactiva
+                ->map(fn (AreaPreparacion $a) => [...$a->toArray(), 'usada' => $this->areaUsada($a->id)]),
             'impresoras' => \App\Models\Impresora::where('activo', true)->orderBy('alias')->get(['id', 'alias as nombre', 'uso']),
             'categorias' => Categoria::orderBy('nombre')->get(['id', 'nombre', 'area_preparacion_id']),
         ]);
@@ -134,6 +155,35 @@ class ConfigMesasApiController extends Controller
     public function actualizarArea(Request $request, int $id)
     {
         return $this->guardarArea($request, $id);
+    }
+
+    private function areaUsada(int $id): bool
+    {
+        return DB::table('comandas')->where('area_id', $id)->exists()
+            || DB::table('ordenes_items')->where('area_id', $id)->exists();
+    }
+
+    // DELETE /mesas/config/areas/{id}: solo si nunca recibió comandas y no tiene categorías
+    public function borrarArea(int $id)
+    {
+        $area = AreaPreparacion::findOrFail($id);
+
+        if ($this->areaUsada($area->id)) {
+            return response()->json(['success' => 0, 'status' => 'BUSINESS_RULE',
+                'message' => "No se puede borrar «{$area->nombre}»: ya recibió comandas. Desactívala en su lugar."], 422);
+        }
+        // Sin este aviso sus categorías quedarían en «Sin comanda» sin que nadie lo note
+        $categorias = Categoria::where('area_preparacion_id', $area->id)->orderBy('nombre')->pluck('nombre');
+        if ($categorias->isNotEmpty()) {
+            return response()->json(['success' => 0, 'status' => 'BUSINESS_RULE',
+                'message' => "«{$area->nombre}» tiene categorías asignadas ({$categorias->implode(', ')}). Pásalas a otra área (o a «Sin comanda») y guarda antes de borrarla."], 422);
+        }
+
+        $antes = $area->toArray();
+        $area->delete();
+        AuditoriaService::registrar('mesas', 'borrar_area', $area, $antes, null, $area->nombre);
+
+        return response()->json(['success' => 1, 'message' => "Área {$area->nombre} borrada"]);
     }
 
     // PUT /mesas/config/categorias {asignaciones: [{categoria_id, area_id|null}]}

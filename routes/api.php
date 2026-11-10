@@ -379,9 +379,11 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
         Route::post('/mesas/config/terminales', [ConfigMesasApiController::class, 'guardarTerminal']);
         Route::put('/mesas/config/terminales/orden', [ConfigMesasApiController::class, 'ordenarTerminales']);
         Route::put('/mesas/config/terminales/{id}', [ConfigMesasApiController::class, 'actualizarTerminal'])->whereNumber('id');
+        Route::delete('/mesas/config/terminales/{id}', [ConfigMesasApiController::class, 'borrarTerminal'])->whereNumber('id');
         Route::get('/mesas/config/areas', [ConfigMesasApiController::class, 'areas']);
         Route::post('/mesas/config/areas', [ConfigMesasApiController::class, 'guardarArea']);
         Route::put('/mesas/config/areas/{id}', [ConfigMesasApiController::class, 'actualizarArea'])->whereNumber('id');
+        Route::delete('/mesas/config/areas/{id}', [ConfigMesasApiController::class, 'borrarArea'])->whereNumber('id');
         Route::put('/mesas/config/categorias', [ConfigMesasApiController::class, 'asignarCategorias']);
         Route::get('/mesas/config/modificadores', [ConfigMesasApiController::class, 'grupos']);
         Route::post('/mesas/config/modificadores', [ConfigMesasApiController::class, 'guardarGrupo']);

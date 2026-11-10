@@ -389,6 +389,48 @@ class MesasTest extends TestCase
         $this->assertSame(2, Comanda::distinct()->count('numero'));
     }
 
+    public function test_terminales_y_areas_solo_se_borran_si_nunca_se_usaron(): void
+    {
+        $this->actuarComo('admin');
+        $nueva = Terminal::create(['nombre' => 'Mesa nueva', 'tipo' => 'mesa', 'zona' => 'Salón', 'capacidad' => 2, 'orden' => 99, 'activo' => true]);
+        $vacia = AreaPreparacion::create(['nombre' => 'Postres', 'color' => '#7c3aed', 'activo' => true]);
+
+        // MESA 1 recibe una orden enviada: la mesa y Barra/Cocina quedan usadas
+        $orden = $this->abrir($this->mesa1)['id'];
+        $this->agregar($orden, [$this->frappe(), ['producto_id' => $this->sandwich->id, 'cantidad' => 1]]);
+        $this->postJson("/api/mesas/ordenes/{$orden}/enviar")->assertOk();
+
+        $terminales = collect($this->getJson('/api/mesas/config/terminales')->assertOk()->json('terminales'))->keyBy('id');
+        $this->assertTrue($terminales[$this->mesa1->id]['usada']);
+        $this->assertFalse($terminales[$nueva->id]['usada']);
+        $areas = collect($this->getJson('/api/mesas/config/areas')->assertOk()->json('areas'))->keyBy('nombre');
+        $this->assertTrue($areas['Barra']['usada']);
+        $this->assertFalse($areas['Postres']['usada']);
+
+        // Usadas: no se borran
+        $this->deleteJson("/api/mesas/config/terminales/{$this->mesa1->id}")->assertStatus(422);
+        $this->deleteJson("/api/mesas/config/areas/{$areas['Barra']['id']}")->assertStatus(422);
+        $this->assertDatabaseHas('terminales', ['id' => $this->mesa1->id]);
+
+        // Sin usar pero con categorías: primero hay que reasignarlas
+        Categoria::where('nombre', 'Pan')->update(['area_preparacion_id' => $vacia->id]);
+        $this->deleteJson("/api/mesas/config/areas/{$vacia->id}")->assertStatus(422)
+            ->assertJsonPath('success', 0);
+        Categoria::where('nombre', 'Pan')->update(['area_preparacion_id' => null]);
+
+        // Nunca usadas: se borran
+        $this->deleteJson("/api/mesas/config/terminales/{$nueva->id}")->assertOk();
+        $this->deleteJson("/api/mesas/config/areas/{$vacia->id}")->assertOk();
+        $this->assertDatabaseMissing('terminales', ['id' => $nueva->id]);
+        $this->assertDatabaseMissing('areas_preparacion', ['id' => $vacia->id]);
+        $this->assertDatabaseHas('auditorias', ['accion' => 'borrar_terminal']);
+        $this->assertDatabaseHas('auditorias', ['accion' => 'borrar_area']);
+
+        // Un mesero no configura mesas
+        $this->actuarComo('mesero');
+        $this->deleteJson("/api/mesas/config/terminales/{$this->mesa2->id}")->assertForbidden();
+    }
+
     public function test_cada_area_imprime_su_propio_ticket_aunque_haya_una_sola_impresora(): void
     {
         $transporte = new class implements Transporte {

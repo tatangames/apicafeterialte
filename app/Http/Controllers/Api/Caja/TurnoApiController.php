@@ -34,7 +34,7 @@ class TurnoApiController extends Controller
     // Cierre ciego: quien no supervisa cajas no ve el efectivo esperado del turno abierto
     private function ocultarEsperado(Request $request): bool
     {
-        return ConfiguracionNegocio::actual()->cierre_ciego && !$request->user()->can('caja.historial');
+        return CajaService::ocultarEsperado();
     }
 
     private function formatoMovimiento(MovimientoCaja $m): array

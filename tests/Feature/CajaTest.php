@@ -285,9 +285,15 @@ class CajaTest extends TestCase
             ->assertJsonPath('cierre_ciego', true)
             ->assertJsonPath('aviso_cambio', true); // la ventana de cobro avisa si no alcanza el cambio (por defecto, sí)
 
+        // Pagar de caja más de lo que hay tampoco le dice cuánto hay
+        $this->movimiento('egreso', 80)->assertStatus(422)
+            ->assertJsonPath('message', 'No hay suficiente efectivo en caja para sacar ese monto. Págalo desde otra cuenta o registra antes un ingreso.');
+
         $this->actuarComo('admin');
         $this->getJson("/api/caja/turno-actual?caja_id={$this->caja->id}")
             ->assertJsonPath('resumen.efectivo_esperado', 50);
+        $this->movimiento('egreso', 80)->assertStatus(422)
+            ->assertJsonPath('message', 'No hay suficiente efectivo en caja: disponible $50.00');
     }
 
     public function test_turno_actual_sin_turno_devuelve_null(): void

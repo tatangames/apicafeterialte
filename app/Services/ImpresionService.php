@@ -665,7 +665,14 @@ class ImpresionService
             }
         }
 
-        $doc->separador()->negrita()->columnas('Efectivo esperado', $dinero($turno->efectivo_esperado ?? $resumen['efectivo_esperado']));
+        // Corte parcial con cierre ciego: quien imprime sin ver el historial de cierres no ve
+        // cuánto debería haber (igual que en pantalla); el cierre ya contado sí lo muestra
+        $doc->separador()->negrita();
+        if ($turno->estaAbierto() && CajaService::ocultarEsperado()) {
+            $doc->linea('Efectivo esperado: oculto (cierre ciego)');
+        } else {
+            $doc->columnas('Efectivo esperado', $dinero($turno->efectivo_esperado ?? $resumen['efectivo_esperado']));
+        }
         if ($turno->efectivo_contado !== null) {
             $diferencia = (float) $turno->diferencia;
             $doc->columnas('Efectivo contado', $dinero($turno->efectivo_contado))

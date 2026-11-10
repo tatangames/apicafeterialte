@@ -34,6 +34,12 @@ class CajaService
         throw new NegocioException("La caja tiene abierto el turno de {$de}. Ciérralo y abre el tuyo para seguir.");
     }
 
+    /** Cierre ciego: quien no ve el historial de cierres no debe saber cuánto efectivo hay en caja. */
+    public static function ocultarEsperado(): bool
+    {
+        return ConfiguracionNegocio::actual()->cierre_ciego && !auth()->user()?->can('caja.historial');
+    }
+
     /** Si el usuario puede vender y registrar dinero en ese turno (el suyo, o el de otro con permiso). */
     public static function puedeOperarEn(TurnoCaja $turno, $usuario): bool
     {
@@ -128,9 +134,10 @@ class CajaService
             if (in_array($tipo, MovimientoCaja::TIPOS_SALIDA, true) && $metodo->afecta_efectivo) {
                 $disponible = self::resumen($turno)['efectivo_esperado'];
                 if (round($monto, 2) > round($disponible, 2)) {
-                    throw new NegocioException(
-                        'No hay suficiente efectivo en caja: disponible $' . number_format($disponible, 2)
-                    );
+                    // Con cierre ciego no se revela cuánto hay (lo ve solo quien ve el historial de cierres)
+                    throw new NegocioException(self::ocultarEsperado()
+                        ? 'No hay suficiente efectivo en caja para sacar ese monto. Págalo desde otra cuenta o registra antes un ingreso.'
+                        : 'No hay suficiente efectivo en caja: disponible $' . number_format($disponible, 2));
                 }
             }
 

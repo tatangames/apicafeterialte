@@ -440,6 +440,25 @@ class ImpresionTest extends TestCase
         $this->assertStringContainsString('$1.00', $texto);
     }
 
+    public function test_corte_parcial_con_cierre_ciego_no_muestra_el_esperado(): void
+    {
+        $this->impresora(['predeterminada' => true]);
+        \App\Models\ConfiguracionNegocio::actual()->update(['cierre_ciego' => true]);
+
+        // El cajero (sin historial de cierres) imprime el corte con el turno abierto
+        $this->actuarComo('cajero');
+        $this->postJson("/api/impresion/turnos/{$this->turno->id}")->assertJsonPath('impreso', true);
+        $texto = $this->transporte->texto(0);
+        $this->assertStringContainsString('CORTE PARCIAL', $texto);
+        $this->assertStringContainsString('Efectivo esperado: oculto (cierre ciego)', $texto);
+
+        // El admin sí lo ve
+        $this->actuarComo('admin');
+        $this->postJson("/api/impresion/turnos/{$this->turno->id}")->assertJsonPath('impreso', true);
+        $this->assertStringNotContainsString('oculto', $this->transporte->texto(1));
+        $this->assertMatchesRegularExpression('/Efectivo esperado\s+\$20\.00/', $this->transporte->texto(1));
+    }
+
     public function test_boton_de_prueba_muestra_el_error_de_conexion(): void
     {
         $impresora = $this->impresora();

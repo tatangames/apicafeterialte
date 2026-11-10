@@ -52,9 +52,8 @@ return [
 
     'expiration' => null,
 
-    // Horas de vida de la sesión web (token con expires_at). La tableta de meseros no vence.
-    // 0 = sin vencimiento.
-    'horas_sesion_web' => (int) env('SESION_WEB_HORAS', 16),
+    // Las sesiones (web y tablet) no vencen: duran hasta que la persona toca «Cerrar sesión»,
+    // se cambia de usuario o el administrador la desactiva.
 
     /*
     |--------------------------------------------------------------------------

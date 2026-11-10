@@ -64,10 +64,8 @@ class LoginApiController extends Controller
 
         // Login exitoso - continúa con el token
         $deviceName = $request->device_name ?? 'default';
-        // La tableta de meseros nunca vence (es la herramienta del día); el resto (web) vence a las N horas
-        $horas = (int) config('sanctum.horas_sesion_web', 12);
-        $vence = $deviceName === 'tablet-meseros' || $horas <= 0 ? null : now()->addHours($horas);
-        $token = $user->createToken($deviceName, ['*'], $vence)->plainTextToken;
+        // La sesión no vence (web ni tablet): dura hasta que se toca «Cerrar sesión»
+        $token = $user->createToken($deviceName)->plainTextToken;
 
         $user->forceFill(['ultimo_acceso' => now()])->save();
 

@@ -22,27 +22,25 @@ class LoginTest extends TestCase
         $this->assertDatabaseHas('auditorias', ['modulo' => 'auth', 'accion' => 'login', 'usuario_id' => $usuario->id]);
     }
 
-    public function test_sesion_web_vence_a_las_horas_configuradas_y_la_tableta_no(): void
+    public function test_la_sesion_web_y_la_de_la_tableta_no_vencen_hasta_cerrar_sesion(): void
     {
-        // SESION_WEB_HORAS en .env (hoy 16); la prueba sigue a la configuración
-        $horas = (int) config('sanctum.horas_sesion_web');
-        $this->assertGreaterThan(1, $horas);
         $this->crearUsuario('cajero', ['email' => 'cajero@test.com']);
 
         $web = $this->postJson('/api/login', ['email' => 'cajero@test.com', 'password' => 'secreto123', 'device_name' => 'Web Application'])->json('token');
         $tablet = $this->postJson('/api/login', ['email' => 'cajero@test.com', 'password' => 'secreto123', 'device_name' => 'tablet-meseros'])->json('token');
 
-        $this->travel($horas - 1)->hours();
-        $this->app['auth']->forgetGuards();
-        $this->withToken($web)->getJson('/api/me')->assertOk();
-
-        $this->travel(2)->hours();
-        $this->app['auth']->forgetGuards();
-        $this->withToken($web)->getJson('/api/me')->assertStatus(401);
-
+        // Un mes después las dos siguen abiertas
         $this->travel(30)->days();
         $this->app['auth']->forgetGuards();
+        $this->withToken($web)->getJson('/api/me')->assertOk();
+        $this->app['auth']->forgetGuards();
         $this->withToken($tablet)->getJson('/api/me')->assertOk();
+
+        // Solo «Cerrar sesión» la termina
+        $this->app['auth']->forgetGuards();
+        $this->withToken($web)->postJson('/api/logout')->assertOk();
+        $this->app['auth']->forgetGuards();
+        $this->withToken($web)->getJson('/api/me')->assertStatus(401);
     }
 
     public function test_credenciales_invalidas_usan_el_mismo_mensaje(): void

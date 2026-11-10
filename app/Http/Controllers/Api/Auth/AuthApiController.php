@@ -124,9 +124,8 @@ class AuthApiController extends Controller
         }
 
         $dispositivo = $token instanceof PersonalAccessToken ? $token->name : 'tablet-meseros';
-        $horas = (int) config('sanctum.horas_sesion_web', 12);
-        $vence = $dispositivo === 'tablet-meseros' || $horas <= 0 ? null : now()->addHours($horas);
-        $plano = $nuevo->createToken($dispositivo, ['*'], $vence)->plainTextToken;
+        // Como al entrar: la sesión no vence hasta cerrar sesión
+        $plano = $nuevo->createToken($dispositivo)->plainTextToken;
 
         if ($token instanceof PersonalAccessToken) {
             $token->delete();

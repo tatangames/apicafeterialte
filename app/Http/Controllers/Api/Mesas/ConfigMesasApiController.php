@@ -163,15 +163,18 @@ class ConfigMesasApiController extends Controller
 
     public function grupos()
     {
-        $grupos = GrupoModificador::with(['opciones.insumo:id,nombre', 'opciones.unidad:id,abreviatura', 'productos:id,nombre'])->orderBy('nombre')->get();
+        // Las opciones quitadas del grupo no se muestran; las apagadas sí (se pueden volver a encender)
+        $grupos = GrupoModificador::with(['opciones' => fn ($q) => $q->where('eliminada', false), 'opciones.insumo:id,nombre',
+            'opciones.unidad:id,abreviatura', 'productos:id,nombre'])->orderBy('nombre')->get();
 
         return response()->json([
             'success'   => 1,
             'grupos'    => $grupos->map(fn (GrupoModificador $g) => [
                 ...$g->only(['id', 'nombre', 'obligatorio', 'multiple', 'activo']),
+                // obligatorio del grupo: elegir al menos una; «una sola» (exclusiva) y activo son de cada opción
                 'opciones'  => $g->opciones->map(fn ($o) => [
                     'id' => $o->id, 'nombre' => $o->nombre, 'precio' => (float) $o->precio, 'activo' => $o->activo,
-                    'maximo' => max(1, (int) $o->cantidad_maxima),
+                    'maximo' => max(1, (int) $o->cantidad_maxima), 'obligatorio' => $o->obligatorio, 'exclusiva' => $o->exclusiva,
                     'producto_id' => $o->producto_id, 'insumo' => $o->insumo?->nombre,
                     'cantidad' => $o->cantidad !== null ? (float) $o->cantidad : null,
                     'unidad_medida_id' => $o->unidad_medida_id, 'unidad' => $o->unidad?->abreviatura,
@@ -207,6 +210,9 @@ class ConfigMesasApiController extends Controller
             'opciones.*.nombre' => 'required|string|max:80',
             'opciones.*.precio' => 'nullable|numeric|min:0|max:9999',
             'opciones.*.maximo' => 'nullable|integer|min:1|max:20',
+            'opciones.*.obligatorio' => 'nullable|boolean',
+            'opciones.*.exclusiva'   => 'nullable|boolean',
+            'opciones.*.activo'      => 'nullable|boolean',
             'opciones.*.producto_id'      => 'nullable|integer|exists:productos,id',
             'opciones.*.cantidad'         => 'nullable|required_with:opciones.*.producto_id|numeric|gt:0|max:99999',
             'opciones.*.unidad_medida_id' => 'nullable|required_with:opciones.*.producto_id|integer|exists:unidades_medida,id',
@@ -246,12 +252,8 @@ class ConfigMesasApiController extends Controller
         $datos = $validator->validated();
 
         DB::transaction(function () use (&$grupo, $datos) {
-            $campos = [
-                'nombre'      => $datos['nombre'],
-                'obligatorio' => $datos['obligatorio'] ?? false,
-                'multiple'    => $datos['multiple'] ?? false,
-                'activo'      => $datos['activo'] ?? true,
-            ];
+            // «Una sola» y activo son de cada opción; el grupo obligatorio pide elegir al menos una
+            $campos = ['nombre' => $datos['nombre'], 'obligatorio' => (bool) ($datos['obligatorio'] ?? false), 'multiple' => true, 'activo' => true];
             $grupo ? $grupo->update($campos) : $grupo = GrupoModificador::create($campos);
 
             $conservadas = [];
@@ -266,12 +268,16 @@ class ConfigMesasApiController extends Controller
                     'cantidad'         => !empty($o['producto_id']) ? $o['cantidad'] : null,
                     'unidad_medida_id' => !empty($o['producto_id']) ? $o['unidad_medida_id'] : null,
                     'orden'            => $n,
-                    'activo'           => true,
+                    // Si no vienen (versión anterior de la app) se quedan como estaban
+                    'obligatorio'      => isset($o['obligatorio']) ? (bool) $o['obligatorio'] : ($opcion?->obligatorio ?? false),
+                    'exclusiva'        => isset($o['exclusiva']) ? (bool) $o['exclusiva'] : ($opcion?->exclusiva ?? false),
+                    'activo'           => isset($o['activo']) ? (bool) $o['activo'] : ($opcion?->activo ?? true),
+                    'eliminada'        => false,
                 ];
                 $opcion ? $opcion->update($valores) : $opcion = Modificador::create([...$valores, 'grupo_id' => $grupo->id]);
                 $conservadas[] = $opcion->id;
             }
-            Modificador::where('grupo_id', $grupo->id)->whereNotIn('id', $conservadas)->update(['activo' => false]);
+            Modificador::where('grupo_id', $grupo->id)->whereNotIn('id', $conservadas)->update(['activo' => false, 'eliminada' => true]);
 
             $grupo->productos()->sync($datos['productos'] ?? []);
         });

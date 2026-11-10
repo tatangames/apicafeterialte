@@ -36,7 +36,7 @@ class MesasTest extends TestCase
     private Caja $caja;
     private Terminal $mesa1;
     private Terminal $mesa2;
-    private Producto $frappe;    // barra, con leche (obligatorio) y saborizantes (varios)
+    private Producto $frappe;    // barra, con leche (una sola) y saborizantes (varios)
     private Producto $sandwich;  // cocina
     private Producto $pan;       // sin área: se entrega directo
     private array $op;
@@ -70,11 +70,12 @@ class MesasTest extends TestCase
         $this->sandwich = $crear('Sándwich', 4.00, $comida);
         $this->pan = $crear('Pan francés', 0.15, $panes, true);
 
-        $leche = GrupoModificador::create(['nombre' => 'Leche', 'obligatorio' => true]);
-        $sabor = GrupoModificador::create(['nombre' => 'Saborizante', 'multiple' => true]);
+        $leche = GrupoModificador::create(['nombre' => 'Leche']);
+        $sabor = GrupoModificador::create(['nombre' => 'Saborizante']);
         $this->op = [
-            'entera'       => Modificador::create(['grupo_id' => $leche->id, 'nombre' => 'Entera', 'precio' => 0])->id,
-            'deslactosada' => Modificador::create(['grupo_id' => $leche->id, 'nombre' => 'Deslactosada', 'precio' => 0.25])->id,
+            // «Una sola»: elegir una leche quita la otra
+            'entera'       => Modificador::create(['grupo_id' => $leche->id, 'nombre' => 'Entera', 'precio' => 0, 'exclusiva' => true])->id,
+            'deslactosada' => Modificador::create(['grupo_id' => $leche->id, 'nombre' => 'Deslactosada', 'precio' => 0.25, 'exclusiva' => true])->id,
             'caramelo'     => Modificador::create(['grupo_id' => $sabor->id, 'nombre' => 'Caramelo', 'precio' => 0.50])->id,
             'vainilla'     => Modificador::create(['grupo_id' => $sabor->id, 'nombre' => 'Vainilla', 'precio' => 0.50])->id,
         ];
@@ -339,8 +340,20 @@ class MesasTest extends TestCase
         $this->assertSame('Frappuccino (Deslactosada, Caramelo, Vainilla)', $item['descripcion']);
         $this->assertSame('Barra', $item['area']);
 
+        $this->agregar($orden, [$this->frappe(['entera', 'deslactosada'])])->assertStatus(422)
+            ->assertJsonPath('message', '«Entera» no se combina con otras opciones de su grupo en Frappuccino');
+        // Grupo obligatorio: hay que elegir al menos una leche
+        GrupoModificador::where('nombre', 'Leche')->update(['obligatorio' => true]);
         $this->agregar($orden, [$this->frappe(['caramelo'])])->assertStatus(422)->assertJsonPath('message', 'Elige «Leche» para Frappuccino');
-        $this->agregar($orden, [$this->frappe(['entera', 'deslactosada'])])->assertStatus(422)->assertJsonPath('message', 'En «Leche» solo se elige una opción');
+        GrupoModificador::where('nombre', 'Leche')->update(['obligatorio' => false]);
+
+        // Una opción obligatoria va siempre, aunque la app no la mande; una apagada no se puede pedir
+        Modificador::whereKey($this->op['vainilla'])->update(['obligatorio' => true]);
+        $item = $this->agregar($orden, [$this->frappe(['entera', 'caramelo'])])->assertOk()->json('orden.tickets.0.items');
+        $this->assertSame('Frappuccino (Entera, Caramelo, Vainilla)', end($item)['descripcion']);
+        Modificador::whereKey($this->op['vainilla'])->update(['obligatorio' => false, 'activo' => false]);
+        $this->agregar($orden, [$this->frappe(['entera', 'vainilla'])])->assertStatus(422)
+            ->assertJsonPath('message', 'Uno de los extras no corresponde a Frappuccino');
         $this->agregar($orden, [['producto_id' => $this->sandwich->id, 'cantidad' => 1, 'modificadores' => [$this->op['caramelo']]]])
             ->assertStatus(422)->assertJsonPath('message', 'Uno de los extras no corresponde a Sándwich');
     }
@@ -645,9 +658,16 @@ class MesasTest extends TestCase
 
         $this->postJson('/api/mesas/config/modificadores', [
             'nombre' => 'Tamaño', 'obligatorio' => true,
-            'opciones' => [['nombre' => 'Mediano', 'precio' => 0], ['nombre' => 'Grande', 'precio' => 0.75]],
+            'opciones' => [['nombre' => 'Mediano', 'precio' => 0, 'obligatorio' => true, 'exclusiva' => true],
+                ['nombre' => 'Grande', 'precio' => 0.75, 'exclusiva' => true], ['nombre' => 'Extra grande', 'activo' => false]],
             'productos' => [$this->frappe->id],
         ])->assertCreated();
+        // Cada opción guarda sus reglas; la apagada se ve en la configuración pero no al vender
+        $this->getJson('/api/mesas/config/modificadores')
+            ->assertJsonFragment(['nombre' => 'Tamaño', 'obligatorio' => true])
+            ->assertJsonFragment(['nombre' => 'Mediano', 'obligatorio' => true, 'exclusiva' => true])
+            ->assertJsonFragment(['nombre' => 'Extra grande', 'activo' => false]);
+        $this->getJson('/api/mesas/catalogo')->assertJsonMissing(['nombre' => 'Extra grande']);
         $catalogo = $this->getJson('/api/mesas/catalogo')->assertOk();
         $this->assertCount(3, collect($catalogo->json('productos'))->firstWhere('id', $this->frappe->id)['grupos']);
 

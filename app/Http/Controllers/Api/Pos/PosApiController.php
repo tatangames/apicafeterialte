@@ -76,7 +76,7 @@ class PosApiController extends Controller
                 'obligatorio' => $g->obligatorio,
                 'multiple'    => $g->multiple,
                 'opciones'    => $g->opciones->map(fn ($o) => ['id' => $o->id, 'nombre' => $o->nombre, 'precio' => (float) $o->precio,
-                    'maximo' => max(1, (int) $o->cantidad_maxima), 'agotado' => $agotadas->contains($o->id)]),
+                    'maximo' => max(1, (int) $o->cantidad_maxima), 'obligatorio' => $o->obligatorio, 'exclusiva' => $o->exclusiva, 'agotado' => $agotadas->contains($o->id)]),
             ]),
             // false: no se agrega a la venta más de lo que hay en existencia
             'permitir_stock_negativo' => (bool) ConfiguracionNegocio::actual()->permitir_stock_negativo,

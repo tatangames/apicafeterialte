@@ -242,19 +242,22 @@ class OrdenService
 
         $elegidos = [];
         $extra = 0.0;
-        $usados = [];
+        $porGrupo = [];
 
         // Un id repetido es la misma opción pedida varias veces (Huevo extra ×2), hasta su máximo
-        foreach (array_count_values(array_map('intval', $ids)) as $id => $veces) {
+        $pedidas = array_count_values(array_map('intval', $ids));
+        // Las opciones obligatorias van siempre: si no vienen (app anterior), se agregan una vez
+        foreach ($grupos->flatMap->opciones->where('obligatorio', true) as $o) {
+            $pedidas[$o->id] ??= 1;
+        }
+
+        foreach ($pedidas as $id => $veces) {
             $grupo = $grupos->first(fn (GrupoModificador $g) => $g->opciones->contains('id', $id));
             if (!$grupo) {
                 throw new NegocioException("Uno de los extras no corresponde a {$producto->nombre}");
             }
-            if (!$grupo->multiple && isset($usados[$grupo->id])) {
-                throw new NegocioException("En «{$grupo->nombre}» solo se elige una opción");
-            }
-            $usados[$grupo->id] = true;
             $opcion = $grupo->opciones->firstWhere('id', $id);
+            $porGrupo[$grupo->id][] = $opcion;
             $maximo = max(1, (int) $opcion->cantidad_maxima);
             if ($veces > $maximo) {
                 throw new NegocioException($maximo === 1
@@ -266,9 +269,18 @@ class OrdenService
             $extra += (float) $opcion->precio * $veces;
         }
 
+        // Grupo obligatorio: hay que elegir al menos una de sus opciones (Huevos: estrellados o revueltos)
         foreach ($grupos->where('obligatorio', true) as $grupo) {
-            if (!isset($usados[$grupo->id])) {
+            if ($grupo->opciones->isNotEmpty() && empty($porGrupo[$grupo->id])) {
                 throw new NegocioException("Elige «{$grupo->nombre}» para {$producto->nombre}");
+            }
+        }
+
+        // Una opción «una sola» no se combina con otras de su grupo («Sin azúcar» y «Azúcar extra»)
+        foreach ($porGrupo as $opciones) {
+            $sola = collect($opciones)->firstWhere('exclusiva', true);
+            if ($sola && count($opciones) > 1) {
+                throw new NegocioException("«{$sola->nombre}» no se combina con otras opciones de su grupo en {$producto->nombre}");
             }
         }
 

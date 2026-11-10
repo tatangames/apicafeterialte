@@ -13,11 +13,14 @@ class Modificador extends Model
         'nombre',
         'precio',
         'cantidad_maxima',
+        'obligatorio',
+        'exclusiva',
         'producto_id',
         'cantidad',
         'unidad_medida_id',
         'orden',
         'activo',
+        'eliminada',
     ];
 
     protected $casts = [
@@ -26,6 +29,9 @@ class Modificador extends Model
         'cantidad_maxima' => 'integer',
         'orden' => 'integer',
         'activo' => 'boolean',
+        'obligatorio' => 'boolean',
+        'exclusiva' => 'boolean',
+        'eliminada' => 'boolean',
     ];
 
     public function grupo()

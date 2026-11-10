@@ -14,6 +14,11 @@ class Categoria extends Model
         'estado',
     ];
 
+    public function productos()
+    {
+        return $this->belongsToMany(Producto::class, 'categoria_producto');
+    }
+
     public function area()
     {
         return $this->belongsTo(AreaPreparacion::class, 'area_preparacion_id');

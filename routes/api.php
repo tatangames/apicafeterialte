@@ -126,6 +126,7 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
     Route::middleware('permission:catalogos.gestionar')->group(function () {
         Route::post('/admin/categorias/nuevo', [ConfiguracionApiController::class, 'registrarCategoria']);
         Route::put('/admin/categorias/actualizar/{id}', [ConfiguracionApiController::class, 'actualizarCategoria']);
+        Route::delete('/admin/categorias/{id}', [ConfiguracionApiController::class, 'borrarCategoria'])->whereNumber('id');
         Route::post('/admin/unidadmedida/nuevo', [ConfiguracionApiController::class, 'registrarUnidadMedida']);
         Route::put('/admin/unidadmedida/actualizar/{id}', [ConfiguracionApiController::class, 'actualizarUnidadMedida']);
     });

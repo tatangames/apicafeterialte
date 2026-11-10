@@ -22,7 +22,8 @@ class ConfiguracionApiController extends Controller
 
     public function tablaCategorias(){
         // Con su área: el producto muestra a qué comanda va
-        $categorias = Categoria::with('area:id,nombre')->orderBy('id', 'ASC')->get();
+        // productos_count: con 0 se puede borrar (nadie la usa)
+        $categorias = Categoria::with('area:id,nombre')->withCount('productos')->orderBy('id', 'ASC')->get();
 
         return response()->json($categorias);
     }
@@ -53,6 +54,35 @@ class ConfiguracionApiController extends Controller
                 'message' => 'Error al crear categoria',
             ], 500);
         }
+    }
+
+
+    /**
+     * Borra una categoría solo si ningún producto la usa (activo o no). Si ya se usó,
+     * se desactiva en su lugar: así no se pierde a qué categoría pertenecía cada producto.
+     */
+    public function borrarCategoria(Request $request, int $id)
+    {
+        $categoria = Categoria::withCount('productos')->find($id);
+
+        if (!$categoria) {
+            return response()->json(['success' => 0, 'message' => 'La categoría no existe'], 404);
+        }
+
+        if ($categoria->productos_count > 0) {
+            return response()->json([
+                'success' => 0,
+                'status'  => 'BUSINESS_RULE',
+                'message' => "No se puede borrar «{$categoria->nombre}»: la usan {$categoria->productos_count} producto(s). Desactívala en su lugar.",
+            ], 422);
+        }
+
+        $antes = $categoria->only(['id', 'nombre', 'estado', 'area_preparacion_id']);
+        $categoria->delete();
+
+        AuditoriaService::registrar('configuracion', 'borrar_categoria', $categoria, $antes, null, $categoria->nombre);
+
+        return response()->json(['success' => 1, 'message' => 'Categoría borrada']);
     }
 
 

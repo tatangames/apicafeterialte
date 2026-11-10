@@ -266,4 +266,37 @@ class ProduccionTest extends TestCase
         $this->getJson('/api/produccion/recetas')->assertOk();
         $this->getJson('/api/produccion/catalogo')->assertOk();
     }
+
+    public function test_sin_permiso_de_receta_produce_pero_no_ve_ingredientes(): void
+    {
+        $this->actuarComo('admin');
+        $receta = $this->crearReceta(['notas' => 'Amasar 10 minutos'])->json('receta.id');
+
+        $mesero = $this->actuarComo('mesero');
+        $this->assertFalse($mesero->can('produccion.ver_receta'));
+
+        $this->getJson("/api/produccion/recetas/{$receta}")->assertOk()
+            ->assertJsonPath('receta.ingredientes_ocultos', true)
+            ->assertJsonPath('receta.ingredientes', [])
+            ->assertJsonPath('receta.notas', null)
+            ->assertJsonPath('receta.rendimiento', 100);
+
+        // Produce igual: se descuenta lo de la receta aunque no la vea
+        $id = $this->producir($receta)->assertCreated()
+            ->assertJsonPath('produccion.ingredientes_ocultos', true)
+            ->assertJsonPath('produccion.consumos', [])
+            ->json('produccion.id');
+        $this->assertEquals(79, $this->stock($this->harina)); // 100 - 21 lb
+
+        $this->getJson("/api/produccion/{$id}")->assertJsonPath('produccion.consumos', []);
+        $this->getJson('/api/produccion/resumen')->assertJsonPath('resumen.ingredientes_ocultos', true)->assertJsonPath('resumen.consumos', []);
+
+        // Con el permiso ve los ingredientes
+        $mesero->givePermissionTo('produccion.ver_receta');
+        $this->getJson("/api/produccion/recetas/{$receta}")
+            ->assertJsonPath('receta.ingredientes_ocultos', false)
+            ->assertJsonPath('receta.notas', 'Amasar 10 minutos')
+            ->assertJsonCount(2, 'receta.ingredientes');
+        $this->getJson("/api/produccion/{$id}")->assertJsonCount(2, 'produccion.consumos');
+    }
 }

@@ -82,7 +82,12 @@ class ProduccionApiController extends Controller
         ];
 
         if ($completo) {
-            $datos['ingredientes'] = $costeo['ingredientes'];
+            $ve = $this->veIngredientes();
+            $datos['ingredientes_ocultos'] = !$ve;
+            $datos['ingredientes'] = $ve ? $costeo['ingredientes'] : [];
+            if (!$ve) {
+                $datos['notas'] = null;
+            }
             $datos['versiones'] = Receta::where('producto_id', $r->producto_id)->orderByDesc('version')
                 ->get(['id', 'version', 'activa', 'updated_at'])
                 ->map(fn ($v) => ['id' => $v->id, 'version' => $v->version, 'activa' => $v->activa, 'actualizada' => $v->updated_at->format('Y-m-d')]);
@@ -173,6 +178,15 @@ class ProduccionApiController extends Controller
 
     // ── Producción ────────────────────────────────────────────
 
+    // Los ingredientes de una receta solo los ve quien gestiona recetas o tiene «produccion.ver_receta»;
+    // sin él se puede producir igual (se descuenta lo de la receta), pero no se ve con qué
+    private function veIngredientes(): bool
+    {
+        $usuario = request()->user();
+
+        return $usuario && ($usuario->can('recetas.gestionar') || $usuario->can('produccion.ver_receta'));
+    }
+
     private function formatoProduccion(Produccion $p, bool $completo = true): array
     {
         $p->loadMissing(['producto:id,nombre,unidad_medida_id', 'producto.unidadMedida:id,abreviatura', 'receta:id,version', 'usuario:id,nombre']);
@@ -200,7 +214,11 @@ class ProduccionApiController extends Controller
             'creada'               => $p->created_at->format('Y-m-d H:i'),
         ];
 
-        if ($completo) {
+        if ($completo && !$this->veIngredientes()) {
+            $datos['ingredientes_ocultos'] = true;
+            $datos['consumos'] = [];
+        } elseif ($completo) {
+            $datos['ingredientes_ocultos'] = false;
             $p->loadMissing(['consumos.producto:id,nombre,unidad_medida_id', 'consumos.producto.unidadMedida:id,abreviatura']);
             $datos['consumos'] = $p->consumos->map(fn ($c) => [
                 'producto_id'      => $c->producto_id,
@@ -374,6 +392,12 @@ class ProduccionApiController extends Controller
         $hasta = $request->filled('hasta') ? Carbon::parse($request->hasta) : today();
         $desde = $request->filled('desde') ? Carbon::parse($request->desde) : $hasta->copy()->subDays(6);
 
-        return response()->json(['success' => 1, 'resumen' => ProduccionService::resumen($desde, $hasta)]);
+        $resumen = ProduccionService::resumen($desde, $hasta);
+        $resumen['ingredientes_ocultos'] = !$this->veIngredientes();
+        if ($resumen['ingredientes_ocultos']) {
+            $resumen['consumos'] = [];
+        }
+
+        return response()->json(['success' => 1, 'resumen' => $resumen]);
     }
 }

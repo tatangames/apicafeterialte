@@ -61,6 +61,7 @@ return [
         'recetas.gestionar'         => 'Gestionar recetas',
         'produccion.ver'            => 'Ver producción',
         'produccion.registrar'      => 'Registrar producción diaria',
+        'produccion.ver_receta'     => 'Ver los ingredientes de las recetas',
         'mermas.registrar'          => 'Registrar mermas',
 
         // Clientes
@@ -184,6 +185,7 @@ return [
         'recetas.gestionar' => 'Crea y edita recetas: las de producción (4 lb de frijol rinden 80 porciones) y las de venta (una limonada lleva 4 limones), con su rendimiento y merma. Las recetas de venta son las que descuentan insumos al vender.',
         'produccion.ver' => 'Ve las producciones registradas, con lo planificado, lo producido, el rendimiento y el costo.',
         'produccion.registrar' => 'Registra la producción del día: suma el producto terminado al inventario y descuenta las materias primas de su receta. También anula una producción con motivo.',
+        'produccion.ver_receta' => 'Ve los ingredientes, cantidades y procedimiento de cada receta: en Producción, en el detalle de una producción, en el resumen de consumo y en Recetas. Sin este permiso se puede registrar la producción igual (se descuenta lo de la receta), pero solo se ve qué se produce y cuánto, no con qué. Quien gestiona recetas siempre los ve.',
         'mermas.registrar' => 'Registra mermas (pan quemado, vencido, dañado) con su motivo: bajan el inventario y salen al costo en los reportes de mermas y de utilidad. También las anula.',
 
         'clientes.ver' => 'Ve la lista de clientes y su información, y los busca para asignarlos a una venta o a una mesa.',

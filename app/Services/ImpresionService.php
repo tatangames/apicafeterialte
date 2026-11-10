@@ -681,6 +681,10 @@ class ImpresionService
                 ->columnas($diferencia < 0 ? 'FALTANTE' : ($diferencia > 0 ? 'SOBRANTE' : 'DIFERENCIA'), $dinero(abs($diferencia)));
         }
         $doc->normal();
+        if ($turno->efectivo_contado !== null) {
+            // El efectivo no se retira: lo contado es el fondo del siguiente turno
+            $doc->columnas('Queda para el sig. turno', $dinero($turno->efectivo_contado));
+        }
 
         $conteo = $turno->arqueos->firstWhere('tipo', 'cierre')?->denominaciones;
         if ($conteo) {

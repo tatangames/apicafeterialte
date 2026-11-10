@@ -52,6 +52,19 @@ class CajaService
     }
 
     /**
+     * Efectivo que quedó en la gaveta al cerrar el último turno de la caja (lo contado).
+     * El dinero no se retira al cerrar: es el fondo con el que abre el siguiente turno.
+     * null si la caja nunca tuvo un turno cerrado.
+     */
+    public static function efectivoQueQuedo(int $cajaId): ?float
+    {
+        $anterior = TurnoCaja::where('caja_id', $cajaId)->where('estado', 'cerrado')
+            ->latest('cerrado_at')->latest('id')->first();
+
+        return $anterior && $anterior->efectivo_contado !== null ? round((float) $anterior->efectivo_contado, 2) : null;
+    }
+
+    /**
      * Abre un turno en la caja. Bloquea la caja para que dos dispositivos no
      * abran a la vez; la base de datos además impide dos turnos abiertos por caja.
      */

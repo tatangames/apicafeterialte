@@ -86,8 +86,8 @@ class CajaTest extends TestCase
 
         // Ana cierra sesión y entra Luis con su usuario para abrir el siguiente turno
         $luis = $this->actuarComo('mesero', ['nombre' => 'Luis']);
-        $this->abrir(30)->assertCreated()->assertJsonPath('turno.usuario_apertura', 'Luis');
-        $this->cerrarTurno($this->turno()->id, ['efectivo_contado' => 30])->assertOk()->assertJsonPath('turno.usuario_cierre', 'Luis');
+        $this->abrir(50)->assertCreated()->assertJsonPath('turno.usuario_apertura', 'Luis');
+        $this->cerrarTurno($this->turno()->id, ['efectivo_contado' => 50])->assertOk()->assertJsonPath('turno.usuario_cierre', 'Luis');
 
         $this->actuarComo('admin');
         $this->getJson('/api/caja/turnos')->assertOk()->assertJsonPath('total', 2);
@@ -294,6 +294,32 @@ class CajaTest extends TestCase
             ->assertJsonPath('resumen.efectivo_esperado', 50);
         $this->movimiento('egreso', 80)->assertStatus(422)
             ->assertJsonPath('message', 'No hay suficiente efectivo en caja: disponible $50.00');
+    }
+
+    public function test_lo_contado_al_cerrar_queda_como_fondo_del_siguiente_turno(): void
+    {
+        $this->actuarComo('cajero');
+        $this->abrir(50)->assertCreated();
+        $this->movimiento('ingreso', 30)->assertCreated();
+        $this->cerrarTurno($this->turno()->id, ['efectivo_contado' => 78])->assertOk();
+
+        // Quien abre ve lo que quedó en la gaveta
+        $this->getJson("/api/caja/turno-actual?caja_id={$this->caja->id}")
+            ->assertOk()
+            ->assertJsonPath('fondo_sugerido', 78)
+            ->assertJsonPath('turno_anterior.efectivo_contado', 78);
+
+        // Otro monto sin explicar se rechaza; sin monto, se abre con lo que quedó
+        $this->abrir(0)->assertStatus(422);
+        $this->postJson('/api/caja/turnos/abrir', ['caja_id' => $this->caja->id])
+            ->assertCreated()
+            ->assertJsonPath('turno.fondo_inicial', 78);
+
+        // Con observaciones sí se acepta otro monto
+        $this->cerrarTurno($this->turno()->id, ['efectivo_contado' => 78])->assertOk();
+        $this->abrir(20, ['observaciones' => 'El dueño retiró $58'])
+            ->assertCreated()
+            ->assertJsonPath('turno.fondo_inicial', 20);
     }
 
     public function test_turno_actual_sin_turno_devuelve_null(): void

@@ -196,10 +196,13 @@ class TurnoApiController extends Controller
 
         return [
             'turno_anterior' => $anterior ? [
-                'id'         => $anterior->id,
-                'cerrado_at' => $anterior->cerrado_at?->format('Y-m-d H:i'),
-                'cerro'      => $anterior->usuarioCierre?->nombre,
+                'id'               => $anterior->id,
+                'cerrado_at'       => $anterior->cerrado_at?->format('Y-m-d H:i'),
+                'cerro'            => $anterior->usuarioCierre?->nombre,
+                'efectivo_contado' => $anterior->efectivo_contado !== null ? (float) $anterior->efectivo_contado : null,
             ] : null,
+            // El efectivo no se retira al cerrar: lo contado queda como fondo del siguiente turno
+            'fondo_sugerido' => CajaService::efectivoQueQuedo($caja->id),
             'por_comprar' => InventarioService::productosEnAlerta(),
         ];
     }
@@ -209,22 +212,33 @@ class TurnoApiController extends Controller
     {
         $validator = validator($request->all(), [
             'caja_id'        => 'required|integer|exists:cajas,id',
-            'fondo_inicial'  => 'required|numeric|min:0|max:99999',
+            'fondo_inicial'  => 'nullable|numeric|min:0|max:99999',
             'denominaciones' => 'nullable|array',
             'observaciones'  => 'nullable|string|max:500',
         ], [
             'caja_id.required'       => 'Selecciona la caja',
-            'fondo_inicial.required' => 'Indica el fondo inicial (puede ser 0)',
             'fondo_inicial.min'      => 'El fondo inicial no puede ser negativo',
         ]);
         if ($validator->fails()) {
             return $this->errorValidacion($validator);
         }
 
-        // Si se contó por denominaciones, manda el conteo del servidor
+        // Lo que quedó en la gaveta al cerrar el turno anterior pasa al nuevo turno
+        $queQuedo = CajaService::efectivoQueQuedo((int) $request->caja_id);
+
+        // Si se contó por denominaciones, manda el conteo del servidor; sin monto, lo que quedó
         $fondo = $request->filled('denominaciones')
             ? CajaService::totalDenominaciones(array_filter($request->denominaciones, fn ($c) => (int) $c > 0))
-            : (float) $request->fondo_inicial;
+            : ($request->filled('fondo_inicial') ? (float) $request->fondo_inicial : ($queQuedo ?? 0.0));
+
+        // Abrir con otro monto (ej. el dueño se llevó dinero sin registrarlo) pide explicar por qué
+        if ($queQuedo !== null && abs($fondo - $queQuedo) >= 0.005 && !trim((string) $request->observaciones)) {
+            return response()->json([
+                'success' => 0,
+                'status'  => 'BUSINESS_RULE',
+                'message' => 'En la caja quedaron $' . number_format($queQuedo, 2) . ' del turno anterior. Si abres con otro monto, escribe en observaciones por qué.',
+            ], 422);
+        }
 
         // El turno es de quien inició sesión: cada empleado entra con su usuario y abre su turno
         $responsable = $request->user();
@@ -234,6 +248,7 @@ class TurnoApiController extends Controller
             'responsable'    => $responsable->nombre,
             'caja_id'        => $turno->caja_id,
             'fondo_inicial'  => $fondo,
+            'fondo_anterior' => $queQuedo,
             'denominaciones' => $request->denominaciones,
         ]);
 

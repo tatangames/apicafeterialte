@@ -129,6 +129,7 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
         Route::delete('/admin/categorias/{id}', [ConfiguracionApiController::class, 'borrarCategoria'])->whereNumber('id');
         Route::post('/admin/unidadmedida/nuevo', [ConfiguracionApiController::class, 'registrarUnidadMedida']);
         Route::put('/admin/unidadmedida/actualizar/{id}', [ConfiguracionApiController::class, 'actualizarUnidadMedida']);
+        Route::delete('/admin/unidadmedida/{id}', [ConfiguracionApiController::class, 'borrarUnidadMedida'])->whereNumber('id');
     });
 
     // ── IMPRESORAS ────────────────────────────────────────────

@@ -49,4 +49,32 @@ class CategoriasTest extends TestCase
         $this->deleteJson("/api/admin/categorias/{$categoria->id}")->assertForbidden();
         $this->assertDatabaseHas('categorias', ['id' => $categoria->id]);
     }
+
+    // ── Unidades de medida ────────────────────────────────────
+
+    public function test_unidad_de_medida_solo_se_borra_si_nada_la_usa(): void
+    {
+        $this->actuarComo('admin');
+        $this->seed(UnidadesMedidaSeeder::class);
+        $usada = UnidadesMedida::first();
+        Producto::create([
+            'nombre' => 'Harina', 'tipo' => 'bien', 'clase' => 'materia_prima',
+            'precio_venta' => 0, 'costo_unitario' => 1, 'unidad_medida_id' => $usada->id,
+        ]);
+        $libre = UnidadesMedida::create(['nombre' => 'Bandeja', 'abreviatura' => 'band', 'tipo' => 'unidad', 'factor_base' => 1, 'estado' => true]);
+
+        $tabla = collect($this->getJson('/api/admin/unidadmedida/tabla')->assertOk()->json())->keyBy('id');
+        $this->assertTrue($tabla[$usada->id]['usada']);
+        $this->assertFalse($tabla[$libre->id]['usada']);
+
+        $this->deleteJson("/api/admin/unidadmedida/{$usada->id}")->assertStatus(422)->assertJsonPath('success', 0);
+        $this->assertDatabaseHas('unidades_medida', ['id' => $usada->id]);
+
+        $this->deleteJson("/api/admin/unidadmedida/{$libre->id}")->assertOk();
+        $this->assertDatabaseMissing('unidades_medida', ['id' => $libre->id]);
+        $this->assertDatabaseHas('auditorias', ['accion' => 'borrar_unidad']);
+
+        $this->actuarComo('mesero');
+        $this->deleteJson("/api/admin/unidadmedida/{$usada->id}")->assertForbidden();
+    }
 }

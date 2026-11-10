@@ -139,10 +139,59 @@ class ConfiguracionApiController extends Controller
     // ================================ UNIDAD DE MEDIDA ==============================
 
 
+    // Tablas que guardan la unidad: si alguna la cita, ya se usó y no se borra (se desactiva)
+    private const USOS_UNIDAD = [
+        'productos'               => 'producto(s)',
+        'recetas_ingredientes'    => 'ingrediente(s) de receta',
+        'ordenes_compra_detalle'  => 'línea(s) de órdenes de compra',
+        'compras_detalle'         => 'línea(s) de compras',
+        'modificadores'           => 'extra(s)',
+    ];
+
+    private function usosUnidad(int $id): array
+    {
+        $usos = [];
+        foreach (self::USOS_UNIDAD as $tabla => $texto) {
+            if ($n = DB::table($tabla)->where('unidad_medida_id', $id)->count()) {
+                $usos[] = "{$n} {$texto}";
+            }
+        }
+        return $usos;
+    }
+
     public function tablaUnidadMedida(){
-        $unidadmedida = UnidadesMedida::orderBy('id', 'ASC')->get();
+        // usada: con true el botón Borrar no aparece
+        $usadas = collect(array_keys(self::USOS_UNIDAD))
+            ->flatMap(fn ($t) => DB::table($t)->whereNotNull('unidad_medida_id')->distinct()->pluck('unidad_medida_id'))
+            ->unique()->flip();
+
+        $unidadmedida = UnidadesMedida::orderBy('id', 'ASC')->get()
+            ->map(fn ($u) => [...$u->toArray(), 'usada' => $usadas->has($u->id)]);
 
         return response()->json($unidadmedida);
+    }
+
+    // DELETE /admin/unidadmedida/{id}: solo si nada la usa (productos, recetas, compras, extras)
+    public function borrarUnidadMedida(int $id)
+    {
+        $unidad = UnidadesMedida::find($id);
+        if (!$unidad) {
+            return response()->json(['success' => 0, 'message' => 'La unidad de medida no existe'], 404);
+        }
+
+        if ($usos = $this->usosUnidad($unidad->id)) {
+            return response()->json([
+                'success' => 0,
+                'status'  => 'BUSINESS_RULE',
+                'message' => "No se puede borrar «{$unidad->nombre}»: la usan " . implode(', ', $usos) . '. Desactívala en su lugar.',
+            ], 422);
+        }
+
+        $antes = $unidad->toArray();
+        $unidad->delete();
+        AuditoriaService::registrar('catalogos', 'borrar_unidad', $unidad, $antes, null, $unidad->nombre);
+
+        return response()->json(['success' => 1, 'message' => 'Unidad de medida borrada']);
     }
 
     // Datos de conversión opcionales: sin ellos la unidad es de tipo "unidad" con factor 1

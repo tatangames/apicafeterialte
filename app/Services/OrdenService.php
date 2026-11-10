@@ -143,7 +143,7 @@ class OrdenService
      */
     private static function validarExistencia(Producto $producto, float $cantidad, ?int $excluirItemId = null): void
     {
-        if (!$producto->controla_stock || ConfiguracionNegocio::actual()->permitir_stock_negativo) {
+        if (!$producto->controla_stock || $producto->permite_sin_existencia || ConfiguracionNegocio::actual()->permitir_stock_negativo) {
             return;
         }
         $stock = (float) (Inventario::where('producto_id', $producto->id)->value('stock_actual') ?? 0);

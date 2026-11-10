@@ -164,7 +164,7 @@ class VentaService
             );
             $costo += (float) $mov->costo_unitario * $s['cantidad'];
 
-            if ($offline && (float) $mov->stock_resultante < 0 && !$config->permitir_stock_negativo) {
+            if ($offline && (float) $mov->stock_resultante < 0 && !$config->permitir_stock_negativo && !$mov->producto?->permite_sin_existencia) {
                 $nombre = $s['calculado'] ? $mov->producto?->nombre . " (para {$producto->nombre})" : $producto->nombre;
                 $conflictos[] = "{$nombre}: no había existencia suficiente (quedó en "
                     . rtrim(rtrim(number_format((float) $mov->stock_resultante, 4, '.', ''), '0'), '.') . ')';

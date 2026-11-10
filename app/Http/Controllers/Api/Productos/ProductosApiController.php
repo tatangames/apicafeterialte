@@ -32,6 +32,7 @@ class ProductosApiController extends Controller
             'consumo_interno'     => 'nullable|boolean',
             'controla_stock'      => 'required|boolean',
             'permite_fraccion'    => 'required|boolean',
+            'permite_sin_existencia' => 'nullable|boolean',
             'imprime_comanda'     => 'nullable|boolean',
             'costo_unitario'      => 'required|numeric|min:0',
             'precio_venta'        => 'required|numeric|min:0',
@@ -93,7 +94,11 @@ class ProductosApiController extends Controller
             'unidad_medida_id' => $request->input('unidad_medida_id'),
         ]
             // Si no viene (versión anterior de la app) se queda como estaba; al crear, encendido
-            + ($request->has('imprime_comanda') ? ['imprime_comanda' => $request->boolean('imprime_comanda')] : []);
+            + ($request->has('imprime_comanda') ? ['imprime_comanda' => $request->boolean('imprime_comanda')] : [])
+            // Solo tiene sentido si lleva inventario (Coca-Cola): se vende aunque marque 0. Si no viene
+            // (versión anterior de la app) se queda como estaba, salvo que deje de llevar inventario
+            + ($request->has('permite_sin_existencia') || !$controlaStock
+                ? ['permite_sin_existencia' => $controlaStock && $request->boolean('permite_sin_existencia')] : []);
     }
 
     private function errorValidacion($validator)
@@ -313,6 +318,7 @@ class ProductosApiController extends Controller
                 'consumo_interno'  => $producto->consumo_interno,
                 'controla_stock'   => $producto->controla_stock,
                 'permite_fraccion' => $producto->permite_fraccion,
+                'permite_sin_existencia' => $producto->permite_sin_existencia,
                 'imprime_comanda'  => $producto->imprime_comanda,
                 'costo_unitario'   => $producto->costo_unitario,
                 'precio_venta'     => $producto->precio_venta,

@@ -211,6 +211,7 @@ class MesaApiController extends Controller
                 'categorias'       => $p->categorias->pluck('id'),
                 'grupos'           => $p->gruposModificadores->pluck('id'),
                 'stock'            => $p->controla_stock ? (float) ($p->inventario?->stock_actual ?? 0) : null,
+                'permite_sin_existencia' => $p->controla_stock && $p->permite_sin_existencia,
                 'disponible'       => $p->controla_stock ? round((float) ($p->inventario?->stock_actual ?? 0), 4) : null,
                 'bajo_minimo'      => $p->controla_stock && \App\Services\InventarioService::enAlerta(
                     (float) ($p->inventario?->stock_actual ?? 0), (float) ($p->inventario?->stock_minimo ?? 0)),

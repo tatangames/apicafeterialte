@@ -46,6 +46,8 @@ class PosApiController extends Controller
                 'unidad'           => $p->unidadMedida?->abreviatura,
                 'permite_fraccion' => $p->permite_fraccion,
                 'controla_stock'   => $p->controla_stock,
+                // Se vende aunque no haya existencia, aunque el negocio no permita stock negativo
+                'permite_sin_existencia' => $p->controla_stock && $p->permite_sin_existencia,
                 'consumo_interno'  => $p->consumo_interno,
                 // Área de su comanda (null = comanda general); sirve para imprimir desde el navegador
                 'area'             => $p->areaDeComanda()?->nombre,

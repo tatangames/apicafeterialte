@@ -127,7 +127,10 @@ class InventarioService
             default => throw new NegocioException("Tipo de movimiento no válido: {$tipo}"),
         };
 
-        if ($stockResultante < 0 && !$forzarNegativo && !ConfiguracionNegocio::actual()->permitir_stock_negativo) {
+        // Un producto marcado «Permitir vender sin existencia» (Coca-Cola) puede quedar en negativo al
+        // venderse aunque el negocio no lo permita; sus mermas, ajustes y salidas siguen bloqueando
+        $vendeSinExistencia = $producto->permite_sin_existencia && in_array($tipo, ['venta', 'consumo_interno'], true);
+        if ($stockResultante < 0 && !$forzarNegativo && !$vendeSinExistencia && !ConfiguracionNegocio::actual()->permitir_stock_negativo) {
             throw new NegocioException(
                 "Stock insuficiente para {$producto->nombre}: disponible " . self::formato($stockAnterior)
                 . ', solicitado ' . self::formato($cantidad)

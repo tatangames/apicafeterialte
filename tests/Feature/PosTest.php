@@ -193,6 +193,28 @@ class PosTest extends TestCase
         $this->assertEquals(100, $this->stock($this->pan));
     }
 
+    public function test_producto_que_permite_vender_sin_existencia_queda_en_negativo(): void
+    {
+        ConfiguracionNegocio::actual()->update(['permitir_stock_negativo' => false]);
+        $unidad = UnidadesMedida::where('nombre', 'Unidad')->first();
+        $coca = $this->producto(['nombre' => 'Coca-Cola', 'clase' => 'reventa', 'precio_venta' => 1, 'unidad_medida_id' => $unidad->id,
+            'permite_sin_existencia' => true], 1);
+        $this->actuarComo('cajero');
+
+        $this->getJson('/api/pos/catalogo')->assertOk()
+            ->assertJsonFragment(['nombre' => 'Coca-Cola', 'permite_sin_existencia' => true]);
+
+        $this->vender([['producto_id' => $coca->id, 'cantidad' => 3]], $this->efectivo(3))->assertCreated();
+        $this->assertEquals(-2, $this->stock($coca));
+
+        // Los demás productos siguen bloqueados
+        $this->vender([['producto_id' => $this->pan->id, 'cantidad' => 101]], $this->efectivo(20))->assertStatus(422);
+
+        // Y la Coca-Cola solo se pasa al venderla: una merma o salida a mano sigue bloqueada
+        $this->expectException(\App\Exceptions\NegocioException::class);
+        \App\Services\InventarioService::aplicarMovimiento(productoId: $coca->id, tipo: 'merma', cantidad: 1, motivo: 'Prueba', usuarioId: 1);
+    }
+
     // ── Descuentos ──────────────────────────────────────────────
 
     public function test_descuento_dentro_del_maximo_no_pide_autorizacion(): void

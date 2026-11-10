@@ -12,6 +12,7 @@ class Modificador extends Model
         'grupo_id',
         'nombre',
         'precio',
+        'cantidad_maxima',
         'producto_id',
         'cantidad',
         'unidad_medida_id',
@@ -22,6 +23,7 @@ class Modificador extends Model
     protected $casts = [
         'precio' => 'decimal:2',
         'cantidad' => 'decimal:4',
+        'cantidad_maxima' => 'integer',
         'orden' => 'integer',
         'activo' => 'boolean',
     ];
@@ -40,5 +42,23 @@ class Modificador extends Model
     public function unidad()
     {
         return $this->belongsTo(UnidadesMedida::class, 'unidad_medida_id');
+    }
+
+    /**
+     * Ids de los extras elegidos, repitiendo los que se pidieron más de una vez
+     * (Huevo extra ×2 → [7, 7]): así se cuentan el precio y el insumo.
+     * @param array|null $elegidos [['id', 'opcion', 'precio', 'cantidad'?], ...] como se guardan en la orden
+     */
+    public static function ids(?array $elegidos): array
+    {
+        return collect($elegidos ?? [])->flatMap(fn ($m) => !empty($m['id'])
+            ? array_fill(0, max(1, (int) ($m['cantidad'] ?? 1)), (int) $m['id']) : [])->values()->all();
+    }
+
+    /** Texto de cada extra para ticket, comanda y pantalla: «Huevo extra ×2», «Deslactosada» */
+    public static function textos(?array $elegidos): array
+    {
+        return collect($elegidos ?? [])->map(fn ($m) => ($m['opcion'] ?? '')
+            . ((int) ($m['cantidad'] ?? 1) > 1 ? ' ×' . (int) $m['cantidad'] : ''))->filter()->values()->all();
     }
 }

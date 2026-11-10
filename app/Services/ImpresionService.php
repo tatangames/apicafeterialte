@@ -228,7 +228,7 @@ class ImpresionService
     // Debajo de cada línea, una por renglón con "*": los extras, lo que no lleva y la nota
     private static function notasDeItem(\App\Models\OrdenItem $i): array
     {
-        return collect($i->modificadores ?? [])->map(fn ($m) => $m['opcion'])
+        return collect(\App\Models\Modificador::textos($i->modificadores))
             ->merge($i->textoAjustes())
             ->when($i->notas, fn ($c) => $c->push($i->notas))->values()->all();
     }
@@ -268,7 +268,9 @@ class ImpresionService
             $doc->parrafo($i->nombre_producto);
             // Extras y cambios debajo, un renglón cada uno con «*», como en la comanda
             foreach ($i->modificadores ?? [] as $m) {
-                $doc->parrafo('  * ' . $m['opcion'] . ((float) ($m['precio'] ?? 0) > 0 ? ' (+' . $dinero($m['precio']) . ')' : ''));
+                $veces = max(1, (int) ($m['cantidad'] ?? 1));
+                $doc->parrafo('  * ' . $m['opcion'] . ($veces > 1 ? " ×{$veces}" : '')
+                    . ((float) ($m['precio'] ?? 0) > 0 ? ' (+' . $dinero((float) $m['precio'] * $veces) . ')' : ''));
             }
             foreach ($i->textoAjustes() as $ajuste) {
                 $doc->parrafo("  * {$ajuste}");

@@ -33,7 +33,7 @@ class SyncApiController extends Controller
             'items.*.precio_unitario' => 'required|numeric|min:0',
             'items.*.descuento_tipo'  => 'nullable|in:porcentaje,monto',
             'items.*.descuento_valor' => 'nullable|numeric|min:0',
-            'items.*.modificadores'   => 'nullable|array|max:30',
+            'items.*.modificadores'   => 'nullable|array|max:60',
             'items.*.modificadores.*' => 'integer',
             'items.*.ajustes'         => 'nullable|array|max:50',
             'items.*.ajustes.*.producto_id' => 'required|integer',

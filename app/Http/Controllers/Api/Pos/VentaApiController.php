@@ -118,7 +118,7 @@ class VentaApiController extends Controller
             'items.*.descuento_tipo'  => 'nullable|in:porcentaje,monto',
             'items.*.descuento_valor' => 'nullable|numeric|min:0',
             // Extras elegidos y lo que el cliente pidió distinto de la receta ("sin huevo")
-            'items.*.modificadores'   => 'nullable|array|max:30',
+            'items.*.modificadores'   => 'nullable|array|max:60',
             'items.*.modificadores.*' => 'integer',
             'items.*.ajustes'         => 'nullable|array|max:50',
             'items.*.ajustes.*.producto_id' => 'required|integer',

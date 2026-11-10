@@ -69,7 +69,7 @@ class OrdenItem extends Model
     // Lo que va al ticket y la comanda: «Frappuccino (caramelo, deslactosada)», «Desayuno (sin Huevo)»
     public function descripcion(): string
     {
-        $extras = collect($this->modificadores ?? [])->pluck('opcion')
+        $extras = collect(Modificador::textos($this->modificadores))
             ->merge($this->textoAjustes())->filter()->join(', ');
         return $this->nombre_producto . ($extras ? " ({$extras})" : '');
     }

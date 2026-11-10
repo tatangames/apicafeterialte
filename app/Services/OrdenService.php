@@ -8,6 +8,7 @@ use App\Models\Comanda;
 use App\Models\ConfiguracionNegocio;
 use App\Models\Inventario;
 use App\Models\GrupoModificador;
+use App\Models\Modificador;
 use App\Models\Orden;
 use App\Models\OrdenItem;
 use App\Models\OrdenTicket;
@@ -194,7 +195,7 @@ class OrdenService
                 if (!$i->producto) {
                     return;
                 }
-                $ids = collect($i->modificadores ?? [])->pluck('id')->all();
+                $ids = Modificador::ids($i->modificadores);
                 foreach (self::insumosDeLinea($i->producto, (float) $i->cantidad, $ids, $i->factoresAjuste()) as $id => $c) {
                     $total[$id] = ($total[$id] ?? 0) + $c;
                 }
@@ -243,7 +244,8 @@ class OrdenService
         $extra = 0.0;
         $usados = [];
 
-        foreach (array_unique(array_map('intval', $ids)) as $id) {
+        // Un id repetido es la misma opción pedida varias veces (Huevo extra ×2), hasta su máximo
+        foreach (array_count_values(array_map('intval', $ids)) as $id => $veces) {
             $grupo = $grupos->first(fn (GrupoModificador $g) => $g->opciones->contains('id', $id));
             if (!$grupo) {
                 throw new NegocioException("Uno de los extras no corresponde a {$producto->nombre}");
@@ -253,8 +255,15 @@ class OrdenService
             }
             $usados[$grupo->id] = true;
             $opcion = $grupo->opciones->firstWhere('id', $id);
-            $elegidos[] = ['id' => $opcion->id, 'grupo' => $grupo->nombre, 'opcion' => $opcion->nombre, 'precio' => (float) $opcion->precio];
-            $extra += (float) $opcion->precio;
+            $maximo = max(1, (int) $opcion->cantidad_maxima);
+            if ($veces > $maximo) {
+                throw new NegocioException($maximo === 1
+                    ? "«{$opcion->nombre}» se pide una sola vez por {$producto->nombre}"
+                    : "«{$opcion->nombre}»: máximo {$maximo} por {$producto->nombre}");
+            }
+            $elegidos[] = ['id' => $opcion->id, 'grupo' => $grupo->nombre, 'opcion' => $opcion->nombre, 'precio' => (float) $opcion->precio]
+                + ($veces > 1 ? ['cantidad' => $veces] : []);
+            $extra += (float) $opcion->precio * $veces;
         }
 
         foreach ($grupos->where('obligatorio', true) as $grupo) {
@@ -334,7 +343,7 @@ class OrdenService
                 [$modificadores, $extra] = self::resolverModificadores($producto, $i['modificadores'] ?? []);
 
                 $ajustes = self::resolverAjustes($producto, $i['ajustes'] ?? []);
-                self::validarInsumos($producto, $cantidad, collect($modificadores)->pluck('id')->all(),
+                self::validarInsumos($producto, $cantidad, Modificador::ids($modificadores),
                     (new OrdenItem(['ajustes' => $ajustes]))->factoresAjuste());
                 $notas = trim((string) ($i['notas'] ?? '')) ?: null;
                 $precio = round((float) $producto->precio_venta + $extra, 2);
@@ -419,7 +428,7 @@ class OrdenService
                 $item->precio_unitario = round((float) $item->precio_base + $extra, 2);
             }
             if (isset($datos['cantidad']) || array_key_exists('ajustes', $datos) || array_key_exists('modificadores', $datos)) {
-                self::validarInsumos($item->producto, (float) $item->cantidad, collect($item->modificadores ?? [])->pluck('id')->all(),
+                self::validarInsumos($item->producto, (float) $item->cantidad, Modificador::ids($item->modificadores),
                     $item->factoresAjuste(), $item->id);
             }
             $item->save();
@@ -775,8 +784,8 @@ class OrdenService
                     'precio_orden' => (float) $i->precio_unitario,
                     'nombre_orden' => $i->descripcion(),
                     // Para el ticket: el producto en su renglón y cada extra debajo («* Leche»)
-                    'extras_orden' => collect($i->modificadores ?? [])->pluck('opcion')->merge($i->textoAjustes())->filter()->values()->all(),
-                    'modificadores_orden' => collect($i->modificadores ?? [])->pluck('id')->filter()->values()->all(),
+                    'extras_orden' => collect(Modificador::textos($i->modificadores))->merge($i->textoAjustes())->filter()->values()->all(),
+                    'modificadores_orden' => Modificador::ids($i->modificadores),
                     'ajustes_orden'       => $i->factoresAjuste(),
                 ])->all(),
                 'descuento_global' => $datos['descuento_global'] ?? null,

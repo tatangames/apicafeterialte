@@ -31,7 +31,7 @@ class MostradorApiController extends Controller
         'items'                         => 'required|array|min:1|max:50',
         'items.*.producto_id'           => 'required|integer',
         'items.*.cantidad'              => 'required|numeric|gt:0|max:9999',
-        'items.*.modificadores'         => 'nullable|array|max:20',
+        'items.*.modificadores'         => 'nullable|array|max:60',
         'items.*.modificadores.*'       => 'integer',
         'items.*.notas'                 => 'nullable|string|max:200',
         'items.*.ajustes'               => 'nullable|array|max:30',

@@ -90,7 +90,7 @@ class MesaApiController extends Controller
                 'id'            => $i->id,
                 'nombre'        => $i->nombre_producto,
                 'cantidad'      => (float) $i->cantidad,
-                'modificadores' => collect($i->modificadores ?? [])->pluck('opcion')->all(),
+                'modificadores' => \App\Models\Modificador::textos($i->modificadores),
                 'notas'         => $i->notas,
                 'ajustes'       => $i->textoAjustes(),
                 'cancelado'     => $i->estado === 'cancelado',
@@ -226,6 +226,7 @@ class MesaApiController extends Controller
                 'obligatorio' => $g->obligatorio,
                 'multiple'    => $g->multiple,
                 'opciones'    => $g->opciones->map(fn ($o) => ['id' => $o->id, 'nombre' => $o->nombre, 'precio' => (float) $o->precio,
+                    'maximo' => max(1, (int) $o->cantidad_maxima),
                     // Sin stock negativo: la opción cuyo insumo ya no alcanza para una porción
                     'agotado' => $agotadas->contains($o->id)]),
             ]),
@@ -307,7 +308,7 @@ class MesaApiController extends Controller
             'items'                   => 'required|array|min:1|max:50',
             'items.*.producto_id'     => 'required|integer',
             'items.*.cantidad'        => 'required|numeric|gt:0|max:9999',
-            'items.*.modificadores'   => 'nullable|array|max:20',
+            'items.*.modificadores'   => 'nullable|array|max:60',
             'items.*.modificadores.*' => 'integer',
             'items.*.notas'           => 'nullable|string|max:200',
             'items.*.ajustes'               => 'nullable|array|max:30',
@@ -331,7 +332,7 @@ class MesaApiController extends Controller
             'ajustes'  => 'nullable|array|max:30',
             'ajustes.*.producto_id' => 'required|integer',
             'ajustes.*.cantidad'    => 'required|numeric|min:0',
-            'modificadores'   => 'nullable|array|max:30',
+            'modificadores'   => 'nullable|array|max:60',
             'modificadores.*' => 'integer',
         ]);
         if ($error) return $error;

@@ -171,6 +171,7 @@ class ConfigMesasApiController extends Controller
                 ...$g->only(['id', 'nombre', 'obligatorio', 'multiple', 'activo']),
                 'opciones'  => $g->opciones->map(fn ($o) => [
                     'id' => $o->id, 'nombre' => $o->nombre, 'precio' => (float) $o->precio, 'activo' => $o->activo,
+                    'maximo' => max(1, (int) $o->cantidad_maxima),
                     'producto_id' => $o->producto_id, 'insumo' => $o->insumo?->nombre,
                     'cantidad' => $o->cantidad !== null ? (float) $o->cantidad : null,
                     'unidad_medida_id' => $o->unidad_medida_id, 'unidad' => $o->unidad?->abreviatura,
@@ -205,6 +206,7 @@ class ConfigMesasApiController extends Controller
             'opciones.*.id'     => 'nullable|integer',
             'opciones.*.nombre' => 'required|string|max:80',
             'opciones.*.precio' => 'nullable|numeric|min:0|max:9999',
+            'opciones.*.maximo' => 'nullable|integer|min:1|max:20',
             'opciones.*.producto_id'      => 'nullable|integer|exists:productos,id',
             'opciones.*.cantidad'         => 'nullable|required_with:opciones.*.producto_id|numeric|gt:0|max:99999',
             'opciones.*.unidad_medida_id' => 'nullable|required_with:opciones.*.producto_id|integer|exists:unidades_medida,id',
@@ -217,6 +219,7 @@ class ConfigMesasApiController extends Controller
             'opciones.*.cantidad.required_with'         => 'Indica cuánto gasta cada opción con insumo',
             'opciones.*.cantidad.gt'                    => 'La cantidad del insumo debe ser mayor a 0',
             'opciones.*.unidad_medida_id.required_with' => 'Indica la unidad del insumo de cada opción',
+            'opciones.*.maximo.max'                     => 'Una opción se puede pedir como máximo 20 veces',
         ]);
         // El insumo de una opción tiene que llevar inventario y su unidad debe convertirse a la del insumo
         $validator->after(function ($v) use ($request) {
@@ -257,6 +260,8 @@ class ConfigMesasApiController extends Controller
                 $valores = [
                     'nombre'           => $o['nombre'],
                     'precio'           => round((float) ($o['precio'] ?? 0), 2),
+                    // Si no viene (versión anterior de la app) se queda como estaba
+                    'cantidad_maxima'  => isset($o['maximo']) ? (int) $o['maximo'] : ($opcion?->cantidad_maxima ?? 1),
                     'producto_id'      => $o['producto_id'] ?? null,
                     'cantidad'         => !empty($o['producto_id']) ? $o['cantidad'] : null,
                     'unidad_medida_id' => !empty($o['producto_id']) ? $o['unidad_medida_id'] : null,

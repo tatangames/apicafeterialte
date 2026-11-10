@@ -302,7 +302,7 @@ class ReportesService
                 'o.numero as orden', 'ot.nombre as cuenta', 'i.nombre_producto', 'i.modificadores', 'i.ajustes', 'i.cantidad',
                 'i.precio_unitario', 'i.estado', 'i.motivo_cancelacion', 'ac.nombre as cancelo', 'v.numero as venta', 'v.estado as venta_estado'])
             ->map(function ($r) use ($estados) {
-                $extras = collect(json_decode($r->modificadores ?? '[]', true) ?: [])->pluck('opcion')->filter()->join(', ');
+                $extras = collect(\App\Models\Modificador::textos(json_decode($r->modificadores ?? '[]', true) ?: []))->join(', ');
                 $cancelado = $r->estado === 'cancelado';
                 $anulada = $r->venta_estado === 'anulada';
                 return [

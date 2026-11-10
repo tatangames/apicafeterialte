@@ -184,16 +184,19 @@ class VentaService
             return [];
         }
 
+        // Un id repetido es la opción pedida varias veces (Huevo extra ×2): gasta el doble
+        $veces = array_count_values(array_map('intval', $ids));
+
         return Modificador::with(['insumo.unidadMedida', 'unidad'])
-            ->whereIn('id', $ids)->whereNotNull('producto_id')->get()
+            ->whereIn('id', array_keys($veces))->whereNotNull('producto_id')->get()
             ->filter(fn (Modificador $m) => $m->insumo?->controla_stock && (float) $m->cantidad > 0)
-            ->map(function (Modificador $m) use ($cantidad) {
+            ->map(function (Modificador $m) use ($cantidad, $veces) {
                 $base = $m->insumo->unidadMedida;
                 $porUnidad = $base && $m->unidad ? $m->unidad->convertirA((float) $m->cantidad, $base) : (float) $m->cantidad;
 
                 return [
                     'producto_id' => $m->producto_id,
-                    'cantidad'    => round($porUnidad * $cantidad, 4),
+                    'cantidad'    => round($porUnidad * $cantidad * ($veces[$m->id] ?? 1), 4),
                     'calculado'   => true,
                     'extra'       => $m->nombre,
                 ];
@@ -252,9 +255,9 @@ class VentaService
                 ]);
                 $nota = trim((string) ($item['notas'] ?? ''));
                 $nombre = mb_substr($linea->descripcion() . ($nota !== '' ? " · {$nota}" : ''), 0, 300);
-                $extras = collect($elegidos)->pluck('opcion')->merge($linea->textoAjustes())
+                $extras = collect(Modificador::textos($elegidos))->merge($linea->textoAjustes())
                     ->when($nota !== '', fn ($c) => $c->push($nota))->filter()->values()->all();
-                $modificadores = collect($elegidos)->pluck('id')->all();
+                $modificadores = Modificador::ids($elegidos);
                 $ajustes = $linea->factoresAjuste();
                 $precioEsperado = round((float) $producto->precio_venta + $extra, 2);
                 $precio = $precioEsperado;

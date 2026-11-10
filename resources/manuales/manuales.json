@@ -289,7 +289,7 @@
                 "Cada opción puede tener precio extra, que se suma a la línea.",
                 "Cada opción puede descontar un insumo del inventario (por ejemplo, 30 ml de jarabe de caramelo).",
                 "En el ticket y la comanda salen junto al producto: «Frappuccino (Deslactosada, Caramelo)».",
-                "Se configuran en Configuración → Mesas y cocina → Modificadores."
+                "Se configuran en Inventario → Catálogo de Productos → pestaña Modificadores."
               ]
             },
             {
@@ -331,7 +331,7 @@
           "preguntas": [
             {
               "p": "No me salen los extras de un producto.",
-              "r": "El grupo debe estar activo y asignado a ese producto, y la opción también activa (Configuración → Mesas y cocina → Modificadores)."
+              "r": "El grupo debe estar activo y asignado a ese producto, y la opción también activa (Inventario → Catálogo de Productos → pestaña Modificadores)."
             },
             {
               "p": "No me sale el botón Ingredientes.",

@@ -211,6 +211,47 @@ class RecetasVentaTest extends TestCase
         ])->assertStatus(422);
     }
 
+    public function test_extra_con_cantidad_maxima_cobra_y_descuenta_por_cada_uno(): void
+    {
+        $this->actuarComo('admin');
+        $desayuno = $this->plato('Desayuno típico', 3.00);
+        $this->postJson('/api/mesas/config/modificadores', ['nombre' => 'Extras', 'multiple' => true, 'productos' => [$desayuno->id], 'opciones' => [
+            ['nombre' => 'Huevo extra', 'precio' => 0.50, 'maximo' => 3, 'producto_id' => $this->huevo->id, 'cantidad' => 1, 'unidad_medida_id' => $this->u['Unidad']],
+            ['nombre' => 'Crema'],
+        ]])->assertCreated();
+        $huevoExtra = \App\Models\Modificador::where('nombre', 'Huevo extra')->value('id');
+        $crema = \App\Models\Modificador::where('nombre', 'Crema')->value('id');
+
+        $this->getJson('/api/pos/catalogo')->assertJsonFragment(['id' => $huevoExtra, 'nombre' => 'Huevo extra', 'precio' => 0.5, 'maximo' => 3, 'agotado' => false]);
+        $this->getJson('/api/mesas/config/modificadores')->assertJsonFragment(['nombre' => 'Huevo extra', 'maximo' => 3]);
+
+        $item = fn (array $mods, int $cantidad = 1) => ['producto_id' => $desayuno->id, 'cantidad' => $cantidad, 'modificadores' => $mods];
+        $venta = $this->postJson('/api/pos/ventas', [
+            'uuid' => (string) Str::uuid(), 'caja_id' => $this->caja->id,
+            // 2 desayunos, cada uno con 2 huevos extra y crema
+            'items' => [$item([$huevoExtra, $huevoExtra, $crema], 2)],
+            'pagos' => [['metodo_pago_id' => MetodoPago::where('nombre', 'Efectivo')->value('id'), 'monto' => 10]],
+        ])->assertCreated()->assertJsonPath('venta.total', 8);   // 2 x (3.00 + 2 x 0.50)
+
+        $detalle = Venta::find($venta->json('venta.id'))->detalles()->first();
+        $this->assertSame('Desayuno típico (Huevo extra ×2, Crema)', $detalle->nombre_producto);
+        $this->assertSame(['Huevo extra ×2', 'Crema'], $detalle->extras);
+        $this->assertEquals(56, $this->stock($this->huevo)); // 60 - 2 desayunos x 2 huevos
+
+        // Más del máximo se rechaza; una opción sin máximo se pide una sola vez
+        $sinPagar = fn (array $mods) => $this->postJson('/api/pos/ventas', ['uuid' => (string) Str::uuid(), 'caja_id' => $this->caja->id,
+            'items' => [$item($mods)], 'pagos' => []]);
+        $sinPagar(array_fill(0, 4, $huevoExtra))->assertStatus(422)->assertJsonFragment(['message' => '«Huevo extra»: máximo 3 por Desayuno típico']);
+        $sinPagar([$crema, $crema])->assertStatus(422);
+
+        // En una mesa también: el precio de la línea lleva los 3 huevos
+        $terminal = \App\Models\Terminal::where('nombre', 'MESA 1')->first();
+        $orden = $this->postJson("/api/mesas/terminales/{$terminal->id}/abrir", [])->assertOk()->json('orden');
+        $this->postJson("/api/mesas/ordenes/{$orden['id']}/items", ['items' => [$item(array_fill(0, 3, $huevoExtra))]])->assertOk()
+            ->assertJsonFragment(['opcion' => 'Huevo extra', 'cantidad' => 3])
+            ->assertJsonFragment(['precio_unitario' => 4.5]);
+    }
+
     public function test_ingrediente_comprado_por_libra_se_ajusta_en_gramos(): void
     {
         $this->actuarComo('admin');

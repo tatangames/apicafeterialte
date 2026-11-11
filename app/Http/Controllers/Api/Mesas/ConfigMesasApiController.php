@@ -263,6 +263,7 @@ class ConfigMesasApiController extends Controller
                 ->orderBy('nombre')->get()->map(fn (Producto $p) => [
                     'id' => $p->id, 'nombre' => $p->nombre, 'unidad_medida_id' => $p->unidad_medida_id,
                     'unidad' => $p->unidadMedida?->abreviatura, 'tipo' => $p->unidadMedida?->tipo,
+                    'clase' => $p->clase,
                 ]),
             'unidades'  => UnidadesMedida::orderBy('tipo')->orderBy('factor_base')->get(['id', 'nombre', 'abreviatura', 'tipo']),
         ]);

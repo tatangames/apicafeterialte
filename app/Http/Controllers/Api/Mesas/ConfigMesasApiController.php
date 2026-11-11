@@ -220,7 +220,7 @@ class ConfigMesasApiController extends Controller
         return response()->json([
             'success'   => 1,
             'grupos'    => $grupos->map(fn (GrupoModificador $g) => [
-                ...$g->only(['id', 'nombre', 'obligatorio', 'multiple', 'activo']),
+                ...$g->only(['id', 'nombre', 'obligatorio', 'multiple', 'minimo', 'maximo', 'activo']),
                 // obligatorio del grupo: elegir al menos una; «una sola» (exclusiva) y activo son de cada opción
                 'opciones'  => $g->opciones->map(fn ($o) => [
                     'id' => $o->id, 'nombre' => $o->nombre, 'precio' => (float) $o->precio, 'activo' => $o->activo,
@@ -254,6 +254,8 @@ class ConfigMesasApiController extends Controller
             'nombre'            => 'required|string|max:80',
             'obligatorio'       => 'nullable|boolean',
             'multiple'          => 'nullable|boolean',
+            'minimo'            => 'nullable|integer|min:0|max:50',
+            'maximo'            => 'nullable|integer|min:1|max:50',
             'activo'            => 'nullable|boolean',
             'opciones'          => 'required|array|min:1|max:40',
             'opciones.*.id'     => 'nullable|integer',
@@ -276,9 +278,22 @@ class ConfigMesasApiController extends Controller
             'opciones.*.cantidad.gt'                    => 'La cantidad del insumo debe ser mayor a 0',
             'opciones.*.unidad_medida_id.required_with' => 'Indica la unidad del insumo de cada opción',
             'opciones.*.maximo.max'                     => 'Una opción se puede pedir como máximo 20 veces',
+            'maximo.min'                                => 'El máximo del grupo debe ser al menos 1',
         ]);
         // El insumo de una opción tiene que llevar inventario y su unidad debe convertirse a la del insumo
         $validator->after(function ($v) use ($request) {
+            // Mínimo y máximo del grupo: unidades en total, contando cuántas veces se repite cada opción
+            $min = $request->input('minimo');
+            $max = $request->input('maximo');
+            if (is_numeric($min) && is_numeric($max) && (int) $min > (int) $max) {
+                $v->errors()->add('minimo', 'El mínimo del grupo no puede ser mayor que el máximo');
+            }
+            $alcanzan = collect((array) $request->input('opciones', []))
+                ->filter(fn ($o) => !isset($o['activo']) || $o['activo'])
+                ->sum(fn ($o) => max(1, (int) ($o['maximo'] ?? 1)));
+            if (is_numeric($min) && (int) $min > $alcanzan) {
+                $v->errors()->add('minimo', "Con esas opciones solo se pueden elegir {$alcanzan}: baja el mínimo o sube el máximo de alguna opción");
+            }
             foreach ((array) $request->input('opciones', []) as $o) {
                 if (empty($o['producto_id']) || empty($o['unidad_medida_id'])) {
                     continue;
@@ -303,7 +318,18 @@ class ConfigMesasApiController extends Controller
 
         DB::transaction(function () use (&$grupo, $datos) {
             // «Una sola» y activo son de cada opción; el grupo obligatorio pide elegir al menos una
-            $campos = ['nombre' => $datos['nombre'], 'obligatorio' => (bool) ($datos['obligatorio'] ?? false), 'multiple' => true, 'activo' => true];
+            // minimo/maximo: unidades en total del grupo. Una versión anterior de la app solo manda
+            // «obligatorio»: entonces el mínimo pasa a 1 (o se queda) y el máximo no cambia
+            if (array_key_exists('minimo', $datos)) {
+                $minimo = (int) ($datos['minimo'] ?? 0);
+                $maximo = isset($datos['maximo']) ? (int) $datos['maximo'] : null;
+            } else {
+                $obligatorio = (bool) ($datos['obligatorio'] ?? false);
+                $minimo = $obligatorio ? max(1, (int) ($grupo?->minimo ?? 1)) : 0;
+                $maximo = $grupo?->maximo;
+            }
+            $campos = ['nombre' => $datos['nombre'], 'obligatorio' => $minimo > 0, 'minimo' => $minimo, 'maximo' => $maximo,
+                'multiple' => true, 'activo' => true];
             $grupo ? $grupo->update($campos) : $grupo = GrupoModificador::create($campos);
 
             $conservadas = [];

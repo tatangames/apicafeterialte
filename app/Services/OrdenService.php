@@ -269,10 +269,20 @@ class OrdenService
             $extra += (float) $opcion->precio * $veces;
         }
 
-        // Grupo obligatorio: hay que elegir al menos una de sus opciones (Huevos: estrellados o revueltos)
-        foreach ($grupos->where('obligatorio', true) as $grupo) {
-            if ($grupo->opciones->isNotEmpty() && empty($porGrupo[$grupo->id])) {
-                throw new NegocioException("Elige «{$grupo->nombre}» para {$producto->nombre}");
+        // Unidades en total por grupo, contando repeticiones («Tipo de leche: al menos 1, máximo 2»)
+        foreach ($grupos as $grupo) {
+            if ($grupo->opciones->isEmpty()) {
+                continue;
+            }
+            $total = collect($porGrupo[$grupo->id] ?? [])->sum(fn ($o) => $pedidas[$o->id]);
+            $minimo = max((int) $grupo->minimo, $grupo->obligatorio ? 1 : 0);
+            if ($total < $minimo) {
+                throw new NegocioException($minimo === 1
+                    ? "Elige «{$grupo->nombre}» para {$producto->nombre}"
+                    : "«{$grupo->nombre}»: {$grupo->reglaTexto()} para {$producto->nombre} (llevas {$total})");
+            }
+            if ($grupo->maximo !== null && $total > $grupo->maximo) {
+                throw new NegocioException("«{$grupo->nombre}»: {$grupo->reglaTexto()} para {$producto->nombre} (llevas {$total})");
             }
         }
 

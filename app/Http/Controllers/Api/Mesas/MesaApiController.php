@@ -225,6 +225,9 @@ class MesaApiController extends Controller
                 'nombre'      => $g->nombre,
                 'obligatorio' => $g->obligatorio,
                 'multiple'    => $g->multiple,
+                // Unidades en total del grupo (contando repeticiones); maximo null = sin tope
+                'minimo'      => (int) $g->minimo,
+                'maximo'      => $g->maximo,
                 'opciones'    => $g->opciones->map(fn ($o) => ['id' => $o->id, 'nombre' => $o->nombre, 'precio' => (float) $o->precio,
                     'maximo' => max(1, (int) $o->cantidad_maxima), 'obligatorio' => $o->obligatorio, 'exclusiva' => $o->exclusiva,
                     // Sin stock negativo: la opción cuyo insumo ya no alcanza para una porción

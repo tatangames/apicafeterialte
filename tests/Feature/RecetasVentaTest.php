@@ -252,6 +252,42 @@ class RecetasVentaTest extends TestCase
             ->assertJsonFragment(['precio_unitario' => 4.5]);
     }
 
+    public function test_grupo_con_minimo_y_maximo_cuenta_las_unidades_en_total(): void
+    {
+        $this->actuarComo('admin');
+        $chocolate = $this->plato('Chocolate con leche', 1.75);
+        $base = ['nombre' => 'Tipo de leche', 'productos' => [$chocolate->id], 'opciones' => [
+            ['nombre' => 'Leche entera'], ['nombre' => 'Deslactosada'], ['nombre' => 'Porción de leche', 'precio' => 0.35, 'maximo' => 2],
+        ]];
+
+        // El mínimo no puede pasar del máximo ni de lo que las opciones permiten
+        $this->postJson('/api/mesas/config/modificadores', [...$base, 'minimo' => 3, 'maximo' => 2])->assertStatus(422);
+        $this->postJson('/api/mesas/config/modificadores', [...$base, 'minimo' => 5])->assertStatus(422);
+        $this->postJson('/api/mesas/config/modificadores', [...$base, 'minimo' => 1, 'maximo' => 2])->assertCreated();
+        $grupo = \App\Models\GrupoModificador::where('nombre', 'Tipo de leche')->first();
+        $this->assertTrue($grupo->obligatorio); // las versiones anteriores lo siguen viendo obligatorio
+        $this->getJson('/api/pos/catalogo')->assertJsonFragment(['nombre' => 'Tipo de leche', 'minimo' => 1, 'maximo' => 2]);
+
+        $id = fn (string $n) => \App\Models\Modificador::where('nombre', $n)->value('id');
+        $vender = fn (array $mods) => $this->postJson('/api/pos/ventas', ['uuid' => (string) Str::uuid(), 'caja_id' => $this->caja->id,
+            'items' => [['producto_id' => $chocolate->id, 'cantidad' => 1, 'modificadores' => $mods]],
+            'pagos' => [['metodo_pago_id' => MetodoPago::where('nombre', 'Efectivo')->value('id'), 'monto' => 5]]]);
+
+        // En la mesa sin elegir nada no deja agregar
+        $terminal = \App\Models\Terminal::where('nombre', 'MESA 1')->first();
+        $orden = $this->postJson("/api/mesas/terminales/{$terminal->id}/abrir", [])->assertOk()->json('orden');
+        $this->postJson("/api/mesas/ordenes/{$orden['id']}/items", ['items' => [['producto_id' => $chocolate->id, 'cantidad' => 1, 'modificadores' => []]]])
+            ->assertStatus(422)->assertJsonFragment(['message' => 'Elige «Tipo de leche» para Chocolate con leche']);
+        // Entera + 2 porciones = 3: se pasa del máximo aunque cada opción esté dentro del suyo
+        $vender([$id('Leche entera'), $id('Porción de leche'), $id('Porción de leche')])->assertStatus(422)
+            ->assertJsonFragment(['message' => '«Tipo de leche»: elige de 1 a 2 para Chocolate con leche (llevas 3)']);
+        $vender([$id('Leche entera'), $id('Porción de leche')])->assertCreated()->assertJsonPath('venta.total', 2.1);
+
+        // Una versión anterior que solo manda «obligatorio» no borra el máximo
+        $this->putJson("/api/mesas/config/modificadores/{$grupo->id}", [...$base, 'obligatorio' => true])->assertOk();
+        $this->assertSame([1, 2], [$grupo->fresh()->minimo, $grupo->fresh()->maximo]);
+    }
+
     public function test_ingrediente_comprado_por_libra_se_ajusta_en_gramos(): void
     {
         $this->actuarComo('admin');

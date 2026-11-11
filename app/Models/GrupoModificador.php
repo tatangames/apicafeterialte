@@ -12,14 +12,29 @@ class GrupoModificador extends Model
         'nombre',
         'obligatorio',
         'multiple',
+        'minimo',
+        'maximo',
         'activo',
     ];
 
     protected $casts = [
         'obligatorio' => 'boolean',
         'multiple' => 'boolean',
+        'minimo' => 'integer',
+        'maximo' => 'integer',
         'activo' => 'boolean',
     ];
+
+    /** Texto para avisos: «al menos 1», «máximo 2», «de 1 a 2». */
+    public function reglaTexto(): string
+    {
+        $min = (int) $this->minimo;
+        $max = $this->maximo;
+        if ($min > 0 && $max !== null) {
+            return $min === $max ? "elige {$min}" : "elige de {$min} a {$max}";
+        }
+        return $min > 0 ? "elige al menos {$min}" : ($max !== null ? "máximo {$max}" : '');
+    }
 
     public function opciones()
     {

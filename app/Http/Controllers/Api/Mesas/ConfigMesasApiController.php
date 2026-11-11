@@ -362,11 +362,45 @@ class ConfigMesasApiController extends Controller
             'grupo' => $grupo->nombre, 'opciones' => collect($datos['opciones'])->pluck('nombre')->all(), 'productos' => count($datos['productos'] ?? []),
         ]);
 
-        return response()->json(['success' => 1, 'message' => "Grupo «{$grupo->nombre}» guardado"], $id ? 200 : 201);
+        return response()->json(['success' => 1, 'id' => $grupo->id, 'message' => "Grupo «{$grupo->nombre}» guardado"], $id ? 200 : 201);
     }
 
     public function actualizarGrupo(Request $request, int $id)
     {
         return $this->guardarGrupo($request, $id);
+    }
+
+    // ── Bloques de un producto (como en las apps de delivery) ───────────
+
+    /** GET /mesas/config/productos/{id}/modificadores: ids de sus bloques, en el orden en que salen al vender. */
+    public function bloquesProducto(int $id)
+    {
+        $producto = Producto::findOrFail($id);
+
+        return response()->json([
+            'success' => 1,
+            'grupos'  => $producto->gruposModificadores()->pluck('grupos_modificadores.id'),
+        ]);
+    }
+
+    /**
+     * PUT /mesas/config/productos/{id}/modificadores {grupos: [ids en orden]}: qué bloques lleva el
+     * producto y en qué orden salen. Los bloques en sí (opciones, mínimo, máximo) se editan aparte.
+     */
+    public function ordenarBloquesProducto(Request $request, int $id)
+    {
+        $producto = Producto::findOrFail($id);
+        $datos = $request->validate([
+            'grupos'   => 'present|array|max:30',
+            'grupos.*' => 'integer|distinct|exists:grupos_modificadores,id',
+        ]);
+
+        $antes = $producto->gruposModificadores()->pluck('grupos_modificadores.id')->all();
+        $producto->gruposModificadores()->sync(
+            collect($datos['grupos'])->values()->mapWithKeys(fn ($g, $n) => [$g => ['orden' => $n]])->all()
+        );
+        AuditoriaService::registrar('mesas', 'bloques_producto', $producto, ['grupos' => $antes], ['grupos' => $datos['grupos']], $producto->nombre);
+
+        return response()->json(['success' => 1, 'message' => "Modificadores de «{$producto->nombre}» guardados"]);
     }
 }

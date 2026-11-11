@@ -390,6 +390,8 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
         Route::get('/mesas/config/modificadores', [ConfigMesasApiController::class, 'grupos']);
         Route::post('/mesas/config/modificadores', [ConfigMesasApiController::class, 'guardarGrupo']);
         Route::put('/mesas/config/modificadores/{id}', [ConfigMesasApiController::class, 'actualizarGrupo'])->whereNumber('id');
+        Route::get('/mesas/config/productos/{id}/modificadores', [ConfigMesasApiController::class, 'bloquesProducto'])->whereNumber('id');
+        Route::put('/mesas/config/productos/{id}/modificadores', [ConfigMesasApiController::class, 'ordenarBloquesProducto'])->whereNumber('id');
     });
 
     // ── REPORTES Y PANEL ──────────────────────────────────────

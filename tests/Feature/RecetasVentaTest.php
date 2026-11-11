@@ -288,6 +288,34 @@ class RecetasVentaTest extends TestCase
         $this->assertSame([1, 2], [$grupo->fresh()->minimo, $grupo->fresh()->maximo]);
     }
 
+    public function test_bloques_del_producto_se_asignan_y_ordenan_desde_el_producto(): void
+    {
+        $this->actuarComo('admin');
+        $chocolate = $this->plato('Chocolate caliente', 1.75);
+        $crear = fn (string $nombre) => $this->postJson('/api/mesas/config/modificadores', ['nombre' => $nombre, 'opciones' => [['nombre' => "{$nombre} A"]]])
+            ->assertCreated()->json('id');
+        $leche = $crear('Tipo de leche');
+        $extra = $crear('Leche extra');
+
+        $this->getJson("/api/mesas/config/productos/{$chocolate->id}/modificadores")->assertOk()->assertExactJson(['success' => 1, 'grupos' => []]);
+        $this->putJson("/api/mesas/config/productos/{$chocolate->id}/modificadores", ['grupos' => [$extra, $leche]])->assertOk();
+        $this->getJson("/api/mesas/config/productos/{$chocolate->id}/modificadores")->assertJsonPath('grupos', [$extra, $leche]);
+
+        // Reordenar: así salen en el catálogo de venta
+        $this->putJson("/api/mesas/config/productos/{$chocolate->id}/modificadores", ['grupos' => [$leche, $extra]])->assertOk();
+        $catalogo = collect($this->getJson('/api/pos/catalogo')->json('productos'))->firstWhere('id', $chocolate->id);
+        $this->assertSame([$leche, $extra], $catalogo['grupos']);
+
+        // Quitar uno deja el bloque, solo lo saca del producto
+        $this->putJson("/api/mesas/config/productos/{$chocolate->id}/modificadores", ['grupos' => [$leche]])->assertOk();
+        $this->assertDatabaseHas('grupos_modificadores', ['id' => $extra]);
+        $this->assertDatabaseMissing('producto_grupo_modificador', ['producto_id' => $chocolate->id, 'grupo_id' => $extra]);
+
+        $this->putJson("/api/mesas/config/productos/{$chocolate->id}/modificadores", ['grupos' => [$leche, $leche]])->assertStatus(422);
+        $this->actuarComo('mesero');
+        $this->putJson("/api/mesas/config/productos/{$chocolate->id}/modificadores", ['grupos' => []])->assertForbidden();
+    }
+
     public function test_ingrediente_comprado_por_libra_se_ajusta_en_gramos(): void
     {
         $this->actuarComo('admin');

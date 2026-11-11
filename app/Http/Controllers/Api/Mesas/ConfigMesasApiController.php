@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Mesas;
 use App\Http\Controllers\Controller;
 use App\Models\AreaPreparacion;
 use App\Models\Categoria;
+use App\Models\ConjuntoModificador;
 use App\Models\GrupoModificador;
 use App\Models\Modificador;
 use App\Models\Orden;
@@ -210,28 +211,56 @@ class ConfigMesasApiController extends Controller
     }
 
     // ── Modificadores ─────────────────────────────────────────
+    // Tarjeta (conjunto) → bloques en orden (grupos, con mínimo y máximo) → opciones.
+    // Un producto lleva una sola tarjeta; la venta lee sus bloques de producto_grupo_modificador.
+
+    private function grupoArray(GrupoModificador $g): array
+    {
+        return [
+            ...$g->only(['id', 'nombre', 'obligatorio', 'multiple', 'minimo', 'maximo', 'activo', 'conjunto_id', 'orden']),
+            // «una sola» (exclusiva), obligatoria y activa son de cada opción
+            'opciones'  => $g->opciones->map(fn ($o) => [
+                'id' => $o->id, 'nombre' => $o->nombre, 'precio' => (float) $o->precio, 'activo' => $o->activo,
+                'maximo' => max(1, (int) $o->cantidad_maxima), 'obligatorio' => $o->obligatorio, 'exclusiva' => $o->exclusiva,
+                'producto_id' => $o->producto_id, 'insumo' => $o->insumo?->nombre,
+                'cantidad' => $o->cantidad !== null ? (float) $o->cantidad : null,
+                'unidad_medida_id' => $o->unidad_medida_id, 'unidad' => $o->unidad?->abreviatura,
+            ])->values(),
+            'productos' => $g->relationLoaded('productos') ? $g->productos->map(fn ($p) => ['id' => $p->id, 'nombre' => $p->nombre]) : [],
+        ];
+    }
+
+    /** Las opciones quitadas no se muestran; las apagadas sí (se pueden volver a encender). */
+    private function conOpciones(string $prefijo = ''): array
+    {
+        return [
+            "{$prefijo}opciones" => fn ($q) => $q->where('eliminada', false),
+            "{$prefijo}opciones.insumo:id,nombre",
+            "{$prefijo}opciones.unidad:id,abreviatura",
+        ];
+    }
 
     public function grupos()
     {
-        // Las opciones quitadas del grupo no se muestran; las apagadas sí (se pueden volver a encender)
-        $grupos = GrupoModificador::with(['opciones' => fn ($q) => $q->where('eliminada', false), 'opciones.insumo:id,nombre',
-            'opciones.unidad:id,abreviatura', 'productos:id,nombre'])->orderBy('nombre')->get();
+        $conjuntos = ConjuntoModificador::where('activo', true)
+            ->with(['bloques', ...$this->conOpciones('bloques.'), 'productos:id,nombre'])
+            ->orderBy('nombre')->get();
+        // Para versiones anteriores de la app, que manejan grupos sueltos
+        $grupos = GrupoModificador::where('activo', true)->with([...$this->conOpciones(), 'productos:id,nombre'])->orderBy('nombre')->get();
+        $tarjetaDe = DB::table('conjunto_producto')->pluck('conjunto_id', 'producto_id');
 
         return response()->json([
             'success'   => 1,
-            'grupos'    => $grupos->map(fn (GrupoModificador $g) => [
-                ...$g->only(['id', 'nombre', 'obligatorio', 'multiple', 'minimo', 'maximo', 'activo']),
-                // obligatorio del grupo: elegir al menos una; «una sola» (exclusiva) y activo son de cada opción
-                'opciones'  => $g->opciones->map(fn ($o) => [
-                    'id' => $o->id, 'nombre' => $o->nombre, 'precio' => (float) $o->precio, 'activo' => $o->activo,
-                    'maximo' => max(1, (int) $o->cantidad_maxima), 'obligatorio' => $o->obligatorio, 'exclusiva' => $o->exclusiva,
-                    'producto_id' => $o->producto_id, 'insumo' => $o->insumo?->nombre,
-                    'cantidad' => $o->cantidad !== null ? (float) $o->cantidad : null,
-                    'unidad_medida_id' => $o->unidad_medida_id, 'unidad' => $o->unidad?->abreviatura,
-                ]),
-                'productos' => $g->productos->map(fn ($p) => ['id' => $p->id, 'nombre' => $p->nombre]),
+            'conjuntos' => $conjuntos->map(fn (ConjuntoModificador $c) => [
+                'id'        => $c->id,
+                'nombre'    => $c->nombre,
+                'bloques'   => $c->bloques->map(fn ($g) => $this->grupoArray($g))->values(),
+                'productos' => $c->productos->sortBy('nombre')->map(fn ($p) => ['id' => $p->id, 'nombre' => $p->nombre])->values(),
             ]),
-            'productos' => Producto::where('activo', true)->where('se_vende', true)->orderBy('nombre')->get(['id', 'nombre']),
+            'grupos'    => $grupos->map(fn (GrupoModificador $g) => $this->grupoArray($g)),
+            // conjunto_id: la tarjeta que ya lleva (un producto lleva una sola)
+            'productos' => Producto::where('activo', true)->where('se_vende', true)->orderBy('nombre')->get(['id', 'nombre'])
+                ->map(fn ($p) => ['id' => $p->id, 'nombre' => $p->nombre, 'conjunto_id' => $tarjetaDe[$p->id] ?? null]),
             // Lo que puede gastar una opción: productos con inventario, en una unidad de su mismo tipo
             'insumos'   => Producto::with('unidadMedida:id,abreviatura,tipo')->where('activo', true)->where('controla_stock', true)
                 ->orderBy('nombre')->get()->map(fn (Producto $p) => [
@@ -242,73 +271,155 @@ class ConfigMesasApiController extends Controller
         ]);
     }
 
-    /**
-     * Crea o edita un grupo con sus opciones y los productos que lo usan.
-     * Las opciones que ya no vienen se desactivan (no se borran: hay órdenes que las citan).
-     */
-    public function guardarGrupo(Request $request, ?int $id = null)
+    /** Reglas de las opciones de un bloque; $p es el prefijo («opciones» o «bloques.*.opciones»). */
+    private function reglasOpciones(string $p): array
     {
-        $grupo = $id ? GrupoModificador::findOrFail($id) : null;
+        return [
+            $p                        => 'required|array|min:1|max:40',
+            "{$p}.*.id"               => 'nullable|integer',
+            "{$p}.*.nombre"           => 'required|string|max:80',
+            "{$p}.*.precio"           => 'nullable|numeric|min:0|max:9999',
+            "{$p}.*.maximo"           => 'nullable|integer|min:1|max:20',
+            "{$p}.*.obligatorio"      => 'nullable|boolean',
+            "{$p}.*.exclusiva"        => 'nullable|boolean',
+            "{$p}.*.activo"           => 'nullable|boolean',
+            "{$p}.*.producto_id"      => 'nullable|integer|exists:productos,id',
+            "{$p}.*.cantidad"         => "nullable|required_with:{$p}.*.producto_id|numeric|gt:0|max:99999",
+            "{$p}.*.unidad_medida_id" => "nullable|required_with:{$p}.*.producto_id|integer|exists:unidades_medida,id",
+        ];
+    }
+
+    private function mensajesOpciones(string $p): array
+    {
+        return [
+            "{$p}.required"                         => 'Agrega al menos una opción',
+            "{$p}.*.nombre.required"                => 'Cada opción necesita un nombre',
+            "{$p}.*.cantidad.required_with"         => 'Indica cuánto gasta cada opción con insumo',
+            "{$p}.*.cantidad.gt"                    => 'La cantidad del insumo debe ser mayor a 0',
+            "{$p}.*.unidad_medida_id.required_with" => 'Indica la unidad del insumo de cada opción',
+            "{$p}.*.maximo.max"                     => 'Una opción se puede pedir como máximo 20 veces',
+        ];
+    }
+
+    /**
+     * Mínimo y máximo de un bloque (unidades en total, contando repeticiones) y el insumo de cada
+     * opción (que lleve inventario y su unidad se pueda convertir).
+     */
+    private function validarBloque($v, array $b, string $donde): void
+    {
+        $min = $b['minimo'] ?? null;
+        $max = $b['maximo'] ?? null;
+        if (is_numeric($min) && is_numeric($max) && (int) $min > (int) $max) {
+            $v->errors()->add('minimo', "{$donde}: el mínimo no puede ser mayor que el máximo");
+        }
+        $opciones = (array) ($b['opciones'] ?? []);
+        $alcanzan = collect($opciones)->filter(fn ($o) => !isset($o['activo']) || $o['activo'])->sum(fn ($o) => max(1, (int) ($o['maximo'] ?? 1)));
+        if (is_numeric($min) && (int) $min > $alcanzan) {
+            $v->errors()->add('minimo', "{$donde}: con esas opciones solo se pueden elegir {$alcanzan}; baja el mínimo o sube el máximo de alguna opción");
+        }
+        foreach ($opciones as $o) {
+            if (empty($o['producto_id']) || empty($o['unidad_medida_id'])) {
+                continue;
+            }
+            $insumo = Producto::with('unidadMedida')->find($o['producto_id']);
+            $unidad = UnidadesMedida::find($o['unidad_medida_id']);
+            if (!$insumo || !$unidad) {
+                continue;
+            }
+            $opcion = $o['nombre'] ?? 'opción';
+            if (!$insumo->controla_stock) {
+                $v->errors()->add('opciones', "«{$opcion}»: {$insumo->nombre} no lleva inventario, no se puede descontar");
+            } elseif ($insumo->unidadMedida && $unidad->tipo !== $insumo->unidadMedida->tipo) {
+                $v->errors()->add('opciones', "«{$opcion}»: {$insumo->nombre} se mide en {$insumo->unidadMedida->nombre}, no en {$unidad->nombre}");
+            }
+        }
+    }
+
+    /** Las opciones que ya no vienen se marcan eliminadas (no se borran: hay órdenes que las citan). */
+    private function guardarOpciones(GrupoModificador $grupo, array $opciones): void
+    {
+        $conservadas = [];
+        foreach ($opciones as $n => $o) {
+            $opcion = !empty($o['id']) ? Modificador::where('grupo_id', $grupo->id)->find($o['id']) : null;
+            $valores = [
+                'nombre'           => $o['nombre'],
+                'precio'           => round((float) ($o['precio'] ?? 0), 2),
+                // Si no viene (versión anterior de la app) se queda como estaba
+                'cantidad_maxima'  => isset($o['maximo']) ? (int) $o['maximo'] : ($opcion?->cantidad_maxima ?? 1),
+                'producto_id'      => $o['producto_id'] ?? null,
+                'cantidad'         => !empty($o['producto_id']) ? $o['cantidad'] : null,
+                'unidad_medida_id' => !empty($o['producto_id']) ? $o['unidad_medida_id'] : null,
+                'orden'            => $n,
+                'obligatorio'      => isset($o['obligatorio']) ? (bool) $o['obligatorio'] : ($opcion?->obligatorio ?? false),
+                'exclusiva'        => isset($o['exclusiva']) ? (bool) $o['exclusiva'] : ($opcion?->exclusiva ?? false),
+                'activo'           => isset($o['activo']) ? (bool) $o['activo'] : ($opcion?->activo ?? true),
+                'eliminada'        => false,
+            ];
+            $opcion ? $opcion->update($valores) : $opcion = Modificador::create([...$valores, 'grupo_id' => $grupo->id]);
+            $conservadas[] = $opcion->id;
+        }
+        Modificador::where('grupo_id', $grupo->id)->whereNotIn('id', $conservadas)->update(['activo' => false, 'eliminada' => true]);
+    }
+
+    /** Lo que usa la venta: cada producto de la tarjeta lleva sus bloques, en orden; los que salieron, ninguno. */
+    private function copiarBloquesAProductos(ConjuntoModificador $conjunto): void
+    {
+        $bloques = $conjunto->bloques()->pluck('id')->values();
+        $todos = GrupoModificador::where('conjunto_id', $conjunto->id)->pluck('id');
+        $productos = $conjunto->productos()->pluck('productos.id');
+
+        DB::table('producto_grupo_modificador')->whereIn('grupo_id', $todos)->whereNotIn('producto_id', $productos)->delete();
+        foreach ($productos as $productoId) {
+            Producto::find($productoId)?->gruposModificadores()->sync($bloques->mapWithKeys(fn ($id, $n) => [$id => ['orden' => $n]])->all());
+        }
+    }
+
+    /** Productos que ya llevan otra tarjeta: «Chocolate (ya lleva «Bebidas con leche»)». */
+    private function productosConOtraTarjeta(array $productos, ?int $conjuntoId): array
+    {
+        return DB::table('conjunto_producto as cp')
+            ->join('productos as p', 'p.id', '=', 'cp.producto_id')
+            ->join('conjuntos_modificadores as c', 'c.id', '=', 'cp.conjunto_id')
+            ->whereIn('cp.producto_id', $productos)
+            ->when($conjuntoId, fn ($q) => $q->where('cp.conjunto_id', '!=', $conjuntoId))
+            ->orderBy('p.nombre')->get(['p.nombre as producto', 'c.nombre as tarjeta'])
+            ->map(fn ($f) => "{$f->producto} (ya lleva «{$f->tarjeta}»)")->all();
+    }
+
+    /**
+     * POST /mesas/config/conjuntos y PUT /mesas/config/conjuntos/{id}: la tarjeta con sus bloques en
+     * orden y los productos que la llevan.
+     * {nombre, bloques: [{id?, nombre, minimo, maximo, opciones: [...]}], productos: [ids]}
+     */
+    public function guardarConjunto(Request $request, ?int $id = null)
+    {
+        $conjunto = $id ? ConjuntoModificador::where('activo', true)->findOrFail($id) : null;
 
         $validator = validator($request->all(), [
-            'nombre'            => 'required|string|max:80',
-            'obligatorio'       => 'nullable|boolean',
-            'multiple'          => 'nullable|boolean',
-            'minimo'            => 'nullable|integer|min:0|max:50',
-            'maximo'            => 'nullable|integer|min:1|max:50',
-            'activo'            => 'nullable|boolean',
-            'opciones'          => 'required|array|min:1|max:40',
-            'opciones.*.id'     => 'nullable|integer',
-            'opciones.*.nombre' => 'required|string|max:80',
-            'opciones.*.precio' => 'nullable|numeric|min:0|max:9999',
-            'opciones.*.maximo' => 'nullable|integer|min:1|max:20',
-            'opciones.*.obligatorio' => 'nullable|boolean',
-            'opciones.*.exclusiva'   => 'nullable|boolean',
-            'opciones.*.activo'      => 'nullable|boolean',
-            'opciones.*.producto_id'      => 'nullable|integer|exists:productos,id',
-            'opciones.*.cantidad'         => 'nullable|required_with:opciones.*.producto_id|numeric|gt:0|max:99999',
-            'opciones.*.unidad_medida_id' => 'nullable|required_with:opciones.*.producto_id|integer|exists:unidades_medida,id',
-            'productos'         => 'nullable|array',
-            'productos.*'       => 'integer|exists:productos,id',
+            'nombre'           => 'required|string|max:80',
+            'bloques'          => 'required|array|min:1|max:15',
+            'bloques.*.id'     => 'nullable|integer',
+            'bloques.*.nombre' => 'required|string|max:80',
+            'bloques.*.minimo' => 'nullable|integer|min:0|max:50',
+            'bloques.*.maximo' => 'nullable|integer|min:1|max:50',
+            ...$this->reglasOpciones('bloques.*.opciones'),
+            'productos'        => 'nullable|array',
+            'productos.*'      => 'integer|distinct|exists:productos,id',
         ], [
-            'nombre.required'          => 'Ponle un nombre al grupo (ej. Leche, Saborizante)',
-            'opciones.required'        => 'Agrega al menos una opción',
-            'opciones.*.nombre.required' => 'Cada opción necesita un nombre',
-            'opciones.*.cantidad.required_with'         => 'Indica cuánto gasta cada opción con insumo',
-            'opciones.*.cantidad.gt'                    => 'La cantidad del insumo debe ser mayor a 0',
-            'opciones.*.unidad_medida_id.required_with' => 'Indica la unidad del insumo de cada opción',
-            'opciones.*.maximo.max'                     => 'Una opción se puede pedir como máximo 20 veces',
-            'maximo.min'                                => 'El máximo del grupo debe ser al menos 1',
+            'nombre.required'           => 'Ponle un nombre a la tarjeta (ej. Bebidas con leche)',
+            'bloques.required'          => 'Agrega al menos un bloque (ej. Tipo de leche)',
+            'bloques.*.nombre.required' => 'Cada bloque necesita un nombre',
+            'bloques.*.maximo.min'      => 'El máximo de un bloque debe ser al menos 1',
+            ...$this->mensajesOpciones('bloques.*.opciones'),
         ]);
-        // El insumo de una opción tiene que llevar inventario y su unidad debe convertirse a la del insumo
-        $validator->after(function ($v) use ($request) {
-            // Mínimo y máximo del grupo: unidades en total, contando cuántas veces se repite cada opción
-            $min = $request->input('minimo');
-            $max = $request->input('maximo');
-            if (is_numeric($min) && is_numeric($max) && (int) $min > (int) $max) {
-                $v->errors()->add('minimo', 'El mínimo del grupo no puede ser mayor que el máximo');
+        $validator->after(function ($v) use ($request, $id) {
+            foreach ((array) $request->input('bloques', []) as $b) {
+                $this->validarBloque($v, (array) $b, '«' . ($b['nombre'] ?? 'Bloque') . '»');
             }
-            $alcanzan = collect((array) $request->input('opciones', []))
-                ->filter(fn ($o) => !isset($o['activo']) || $o['activo'])
-                ->sum(fn ($o) => max(1, (int) ($o['maximo'] ?? 1)));
-            if (is_numeric($min) && (int) $min > $alcanzan) {
-                $v->errors()->add('minimo', "Con esas opciones solo se pueden elegir {$alcanzan}: baja el mínimo o sube el máximo de alguna opción");
-            }
-            foreach ((array) $request->input('opciones', []) as $o) {
-                if (empty($o['producto_id']) || empty($o['unidad_medida_id'])) {
-                    continue;
-                }
-                $insumo = Producto::with('unidadMedida')->find($o['producto_id']);
-                $unidad = UnidadesMedida::find($o['unidad_medida_id']);
-                if (!$insumo || !$unidad) {
-                    continue;
-                }
-                $opcion = $o['nombre'] ?? 'opción';
-                if (!$insumo->controla_stock) {
-                    $v->errors()->add('opciones', "«{$opcion}»: {$insumo->nombre} no lleva inventario, no se puede descontar");
-                } elseif ($insumo->unidadMedida && $unidad->tipo !== $insumo->unidadMedida->tipo) {
-                    $v->errors()->add('opciones', "«{$opcion}»: {$insumo->nombre} se mide en {$insumo->unidadMedida->nombre}, no en {$unidad->nombre}");
-                }
+            // Un producto lleva una sola tarjeta
+            if ($otros = $this->productosConOtraTarjeta((array) $request->input('productos', []), $id)) {
+                $v->errors()->add('productos', 'Estos productos ya tienen otros modificadores: ' . implode(', ', $otros)
+                    . '. Quítalos de esa tarjeta primero.');
             }
         });
         if ($validator->fails()) {
@@ -316,10 +427,87 @@ class ConfigMesasApiController extends Controller
         }
         $datos = $validator->validated();
 
+        DB::transaction(function () use (&$conjunto, $datos) {
+            $conjunto ? $conjunto->update(['nombre' => $datos['nombre']]) : $conjunto = ConjuntoModificador::create(['nombre' => $datos['nombre']]);
+
+            $conservados = [];
+            foreach ($datos['bloques'] as $n => $b) {
+                $grupo = !empty($b['id']) ? GrupoModificador::where('conjunto_id', $conjunto->id)->find($b['id']) : null;
+                $minimo = (int) ($b['minimo'] ?? 0);
+                $campos = ['nombre' => $b['nombre'], 'minimo' => $minimo, 'maximo' => isset($b['maximo']) ? (int) $b['maximo'] : null,
+                    'obligatorio' => $minimo > 0, 'multiple' => true, 'activo' => true, 'conjunto_id' => $conjunto->id, 'orden' => $n];
+                $grupo ? $grupo->update($campos) : $grupo = GrupoModificador::create($campos);
+                $this->guardarOpciones($grupo, $b['opciones']);
+                $conservados[] = $grupo->id;
+            }
+            // Bloques quitados de la tarjeta: se apagan (hay órdenes que citan sus opciones)
+            GrupoModificador::where('conjunto_id', $conjunto->id)->whereNotIn('id', $conservados)->update(['activo' => false]);
+
+            DB::table('conjunto_producto')->where('conjunto_id', $conjunto->id)->delete();
+            foreach ($datos['productos'] ?? [] as $productoId) {
+                DB::table('conjunto_producto')->insert(['producto_id' => $productoId, 'conjunto_id' => $conjunto->id]);
+            }
+            $this->copiarBloquesAProductos($conjunto);
+        });
+
+        AuditoriaService::registrar('mesas', 'guardar_modificadores', $conjunto, null, [
+            'tarjeta'   => $conjunto->nombre,
+            'bloques'   => collect($datos['bloques'])->map(fn ($b) => $b['nombre'] . ': ' . collect($b['opciones'])->pluck('nombre')->implode(', '))->all(),
+            'productos' => count($datos['productos'] ?? []),
+        ], $conjunto->nombre);
+
+        return response()->json(['success' => 1, 'id' => $conjunto->id, 'message' => "Modificadores «{$conjunto->nombre}» guardados"], $id ? 200 : 201);
+    }
+
+    public function actualizarConjunto(Request $request, int $id)
+    {
+        return $this->guardarConjunto($request, $id);
+    }
+
+    /** DELETE /mesas/config/conjuntos/{id}: se apaga con sus bloques y sus productos quedan sin modificadores. */
+    public function borrarConjunto(int $id)
+    {
+        $conjunto = ConjuntoModificador::where('activo', true)->findOrFail($id);
+        DB::transaction(function () use ($conjunto) {
+            $grupos = GrupoModificador::where('conjunto_id', $conjunto->id)->pluck('id');
+            DB::table('producto_grupo_modificador')->whereIn('grupo_id', $grupos)->delete();
+            DB::table('conjunto_producto')->where('conjunto_id', $conjunto->id)->delete();
+            GrupoModificador::whereIn('id', $grupos)->update(['activo' => false]);
+            $conjunto->update(['activo' => false]);
+        });
+        AuditoriaService::registrar('mesas', 'borrar_modificadores', $conjunto, ['tarjeta' => $conjunto->nombre], null, $conjunto->nombre);
+
+        return response()->json(['success' => 1, 'message' => "Modificadores «{$conjunto->nombre}» borrados"]);
+    }
+
+    /** Versión anterior de la app: un grupo suelto. Si es nuevo, queda como una tarjeta de un bloque. */
+    public function guardarGrupo(Request $request, ?int $id = null)
+    {
+        $grupo = $id ? GrupoModificador::findOrFail($id) : null;
+
+        $validator = validator($request->all(), [
+            'nombre'      => 'required|string|max:80',
+            'obligatorio' => 'nullable|boolean',
+            'multiple'    => 'nullable|boolean',
+            'minimo'      => 'nullable|integer|min:0|max:50',
+            'maximo'      => 'nullable|integer|min:1|max:50',
+            'activo'      => 'nullable|boolean',
+            ...$this->reglasOpciones('opciones'),
+            'productos'   => 'nullable|array',
+            'productos.*' => 'integer|exists:productos,id',
+        ], [
+            'nombre.required' => 'Ponle un nombre al grupo (ej. Leche, Saborizante)',
+            'maximo.min'      => 'El máximo del grupo debe ser al menos 1',
+            ...$this->mensajesOpciones('opciones'),
+        ]);
+        $validator->after(fn ($v) => $this->validarBloque($v, $request->all(), 'El grupo'));
+        if ($validator->fails()) {
+            return $this->errorValidacion($validator);
+        }
+        $datos = $validator->validated();
+
         DB::transaction(function () use (&$grupo, $datos) {
-            // «Una sola» y activo son de cada opción; el grupo obligatorio pide elegir al menos una
-            // minimo/maximo: unidades en total del grupo. Una versión anterior de la app solo manda
-            // «obligatorio»: entonces el mínimo pasa a 1 (o se queda) y el máximo no cambia
+            // Una versión anterior que solo manda «obligatorio»: el mínimo pasa a 1 (o se queda) y el máximo no cambia
             if (array_key_exists('minimo', $datos)) {
                 $minimo = (int) ($datos['minimo'] ?? 0);
                 $maximo = isset($datos['maximo']) ? (int) $datos['maximo'] : null;
@@ -330,31 +518,11 @@ class ConfigMesasApiController extends Controller
             }
             $campos = ['nombre' => $datos['nombre'], 'obligatorio' => $minimo > 0, 'minimo' => $minimo, 'maximo' => $maximo,
                 'multiple' => true, 'activo' => true];
-            $grupo ? $grupo->update($campos) : $grupo = GrupoModificador::create($campos);
-
-            $conservadas = [];
-            foreach ($datos['opciones'] as $n => $o) {
-                $opcion = !empty($o['id']) ? Modificador::where('grupo_id', $grupo->id)->find($o['id']) : null;
-                $valores = [
-                    'nombre'           => $o['nombre'],
-                    'precio'           => round((float) ($o['precio'] ?? 0), 2),
-                    // Si no viene (versión anterior de la app) se queda como estaba
-                    'cantidad_maxima'  => isset($o['maximo']) ? (int) $o['maximo'] : ($opcion?->cantidad_maxima ?? 1),
-                    'producto_id'      => $o['producto_id'] ?? null,
-                    'cantidad'         => !empty($o['producto_id']) ? $o['cantidad'] : null,
-                    'unidad_medida_id' => !empty($o['producto_id']) ? $o['unidad_medida_id'] : null,
-                    'orden'            => $n,
-                    // Si no vienen (versión anterior de la app) se quedan como estaban
-                    'obligatorio'      => isset($o['obligatorio']) ? (bool) $o['obligatorio'] : ($opcion?->obligatorio ?? false),
-                    'exclusiva'        => isset($o['exclusiva']) ? (bool) $o['exclusiva'] : ($opcion?->exclusiva ?? false),
-                    'activo'           => isset($o['activo']) ? (bool) $o['activo'] : ($opcion?->activo ?? true),
-                    'eliminada'        => false,
-                ];
-                $opcion ? $opcion->update($valores) : $opcion = Modificador::create([...$valores, 'grupo_id' => $grupo->id]);
-                $conservadas[] = $opcion->id;
+            if (!$grupo) {
+                $campos['conjunto_id'] = ConjuntoModificador::create(['nombre' => $datos['nombre']])->id;
             }
-            Modificador::where('grupo_id', $grupo->id)->whereNotIn('id', $conservadas)->update(['activo' => false, 'eliminada' => true]);
-
+            $grupo ? $grupo->update($campos) : $grupo = GrupoModificador::create($campos);
+            $this->guardarOpciones($grupo, $datos['opciones']);
             $grupo->productos()->sync($datos['productos'] ?? []);
         });
 
@@ -370,37 +538,40 @@ class ConfigMesasApiController extends Controller
         return $this->guardarGrupo($request, $id);
     }
 
-    // ── Bloques de un producto (como en las apps de delivery) ───────────
+    // ── Tarjeta de un producto ────────────────────────────────
 
-    /** GET /mesas/config/productos/{id}/modificadores: ids de sus bloques, en el orden en que salen al vender. */
-    public function bloquesProducto(int $id)
+    /** GET /mesas/config/productos/{id}/modificadores: la tarjeta que lleva (o null). */
+    public function conjuntoProducto(int $id)
     {
-        $producto = Producto::findOrFail($id);
+        Producto::findOrFail($id);
 
-        return response()->json([
-            'success' => 1,
-            'grupos'  => $producto->gruposModificadores()->pluck('grupos_modificadores.id'),
-        ]);
+        return response()->json(['success' => 1, 'conjunto_id' => DB::table('conjunto_producto')->where('producto_id', $id)->value('conjunto_id')]);
     }
 
     /**
-     * PUT /mesas/config/productos/{id}/modificadores {grupos: [ids en orden]}: qué bloques lleva el
-     * producto y en qué orden salen. Los bloques en sí (opciones, mínimo, máximo) se editan aparte.
+     * PUT /mesas/config/productos/{id}/modificadores {conjunto_id | null}: cambia la tarjeta del
+     * producto (sale de la que tenía) o se la quita.
      */
-    public function ordenarBloquesProducto(Request $request, int $id)
+    public function asignarConjuntoProducto(Request $request, int $id)
     {
         $producto = Producto::findOrFail($id);
-        $datos = $request->validate([
-            'grupos'   => 'present|array|max:30',
-            'grupos.*' => 'integer|distinct|exists:grupos_modificadores,id',
-        ]);
+        $datos = $request->validate(['conjunto_id' => ['nullable', 'integer', Rule::exists('conjuntos_modificadores', 'id')->where('activo', true)]]);
+        $nuevo = $datos['conjunto_id'] ?? null;
+        $antes = DB::table('conjunto_producto')->where('producto_id', $producto->id)->value('conjunto_id');
 
-        $antes = $producto->gruposModificadores()->pluck('grupos_modificadores.id')->all();
-        $producto->gruposModificadores()->sync(
-            collect($datos['grupos'])->values()->mapWithKeys(fn ($g, $n) => [$g => ['orden' => $n]])->all()
-        );
-        AuditoriaService::registrar('mesas', 'bloques_producto', $producto, ['grupos' => $antes], ['grupos' => $datos['grupos']], $producto->nombre);
+        DB::transaction(function () use ($producto, $nuevo, $antes) {
+            DB::table('conjunto_producto')->where('producto_id', $producto->id)->delete();
+            $producto->gruposModificadores()->sync([]);
+            if ($antes) {
+                $this->copiarBloquesAProductos(ConjuntoModificador::find($antes));
+            }
+            if ($nuevo) {
+                DB::table('conjunto_producto')->insert(['producto_id' => $producto->id, 'conjunto_id' => $nuevo]);
+                $this->copiarBloquesAProductos(ConjuntoModificador::find($nuevo));
+            }
+        });
+        AuditoriaService::registrar('mesas', 'modificadores_producto', $producto, ['conjunto_id' => $antes], ['conjunto_id' => $nuevo], $producto->nombre);
 
-        return response()->json(['success' => 1, 'message' => "Modificadores de «{$producto->nombre}» guardados"]);
+        return response()->json(['success' => 1, 'message' => $nuevo ? "Modificadores de «{$producto->nombre}» guardados" : "«{$producto->nombre}» quedó sin modificadores"]);
     }
 }

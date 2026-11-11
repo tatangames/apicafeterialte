@@ -9,6 +9,8 @@ class GrupoModificador extends Model
     protected $table = 'grupos_modificadores';
 
     protected $fillable = [
+        'conjunto_id',
+        'orden',
         'nombre',
         'obligatorio',
         'multiple',

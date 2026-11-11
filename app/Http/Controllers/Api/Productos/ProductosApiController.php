@@ -332,6 +332,7 @@ class ProductosApiController extends Controller
                         'nombre'         => $producto->nombre,
                         'descripcion'    => $producto->descripcion,
                         'imagen'         => $producto->imagen,
+                        'color_pos'      => $producto->color_pos,
                         'tipo'           => $producto->tipo,
                         'clase'          => $producto->clase,
                         'se_vende'       => $producto->se_vende,

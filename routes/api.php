@@ -390,11 +390,9 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
         Route::get('/mesas/config/modificadores', [ConfigMesasApiController::class, 'grupos']);
         Route::post('/mesas/config/modificadores', [ConfigMesasApiController::class, 'guardarGrupo']);
         Route::put('/mesas/config/modificadores/{id}', [ConfigMesasApiController::class, 'actualizarGrupo'])->whereNumber('id');
-        Route::post('/mesas/config/conjuntos', [ConfigMesasApiController::class, 'guardarConjunto']);
-        Route::put('/mesas/config/conjuntos/{id}', [ConfigMesasApiController::class, 'actualizarConjunto'])->whereNumber('id');
-        Route::delete('/mesas/config/conjuntos/{id}', [ConfigMesasApiController::class, 'borrarConjunto'])->whereNumber('id');
-        Route::get('/mesas/config/productos/{id}/modificadores', [ConfigMesasApiController::class, 'conjuntoProducto'])->whereNumber('id');
-        Route::put('/mesas/config/productos/{id}/modificadores', [ConfigMesasApiController::class, 'asignarConjuntoProducto'])->whereNumber('id');
+        Route::get('/mesas/config/productos/{id}/modificadores', [ConfigMesasApiController::class, 'modificadoresProducto'])->whereNumber('id');
+        Route::put('/mesas/config/productos/{id}/modificadores', [ConfigMesasApiController::class, 'guardarModificadoresProducto'])->whereNumber('id');
+        Route::delete('/mesas/config/productos/{id}/modificadores', [ConfigMesasApiController::class, 'quitarModificadoresProducto'])->whereNumber('id');
     });
 
     // ── REPORTES Y PANEL ──────────────────────────────────────

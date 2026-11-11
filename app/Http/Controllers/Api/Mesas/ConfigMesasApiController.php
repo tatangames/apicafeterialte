@@ -211,8 +211,9 @@ class ConfigMesasApiController extends Controller
     }
 
     // ── Modificadores ─────────────────────────────────────────
-    // Tarjeta (conjunto) → bloques en orden (grupos, con mínimo y máximo) → opciones.
-    // Un producto lleva una sola tarjeta; la venta lee sus bloques de producto_grupo_modificador.
+    // Cada producto tiene sus propios modificadores: su tarjeta (conjunto) → bloques en orden
+    // (grupos, con mínimo y máximo) → opciones. Cambiar uno no toca a otro producto.
+    // La venta lee los bloques del producto de producto_grupo_modificador.
 
     private function grupoArray(GrupoModificador $g): array
     {
@@ -242,23 +243,19 @@ class ConfigMesasApiController extends Controller
 
     public function grupos()
     {
-        $conjuntos = ConjuntoModificador::where('activo', true)
-            ->with(['bloques', ...$this->conOpciones('bloques.'), 'productos:id,nombre'])
-            ->orderBy('nombre')->get();
+        $conjuntos = ConjuntoModificador::where('activo', true)->whereHas('productos')
+            ->with(['bloques', ...$this->conOpciones('bloques.'), 'productos:id,nombre'])->get()
+            ->sortBy(fn ($c) => $c->productos->first()?->nombre)->values();
         // Para versiones anteriores de la app, que manejan grupos sueltos
         $grupos = GrupoModificador::where('activo', true)->with([...$this->conOpciones(), 'productos:id,nombre'])->orderBy('nombre')->get();
         $tarjetaDe = DB::table('conjunto_producto')->pluck('conjunto_id', 'producto_id');
 
         return response()->json([
             'success'   => 1,
-            'conjuntos' => $conjuntos->map(fn (ConjuntoModificador $c) => [
-                'id'        => $c->id,
-                'nombre'    => $c->nombre,
-                'bloques'   => $c->bloques->map(fn ($g) => $this->grupoArray($g))->values(),
-                'productos' => $c->productos->sortBy('nombre')->map(fn ($p) => ['id' => $p->id, 'nombre' => $p->nombre])->values(),
-            ]),
+            // Un producto con sus modificadores: sus bloques en orden
+            'conjuntos' => $conjuntos->map(fn (ConjuntoModificador $c) => $this->tarjetaArray($c)),
             'grupos'    => $grupos->map(fn (GrupoModificador $g) => $this->grupoArray($g)),
-            // conjunto_id: la tarjeta que ya lleva (un producto lleva una sola)
+            // conjunto_id: sus modificadores, si ya tiene
             'productos' => Producto::where('activo', true)->where('se_vende', true)->orderBy('nombre')->get(['id', 'nombre'])
                 ->map(fn ($p) => ['id' => $p->id, 'nombre' => $p->nombre, 'conjunto_id' => $tarjetaDe[$p->id] ?? null]),
             // Lo que puede gastar una opción: productos con inventario, en una unidad de su mismo tipo
@@ -374,52 +371,73 @@ class ConfigMesasApiController extends Controller
         }
     }
 
-    /** Productos que ya llevan otra tarjeta: «Chocolate (ya lleva «Bebidas con leche»)». */
-    private function productosConOtraTarjeta(array $productos, ?int $conjuntoId): array
+    private function tarjetaArray(ConjuntoModificador $c): array
     {
-        return DB::table('conjunto_producto as cp')
-            ->join('productos as p', 'p.id', '=', 'cp.producto_id')
-            ->join('conjuntos_modificadores as c', 'c.id', '=', 'cp.conjunto_id')
-            ->whereIn('cp.producto_id', $productos)
-            ->when($conjuntoId, fn ($q) => $q->where('cp.conjunto_id', '!=', $conjuntoId))
-            ->orderBy('p.nombre')->get(['p.nombre as producto', 'c.nombre as tarjeta'])
-            ->map(fn ($f) => "{$f->producto} (ya lleva «{$f->tarjeta}»)")->all();
+        $producto = $c->productos->first();
+
+        return [
+            'id'          => $c->id,
+            'producto_id' => $producto?->id,
+            'producto'    => $producto?->nombre,
+            'bloques'     => $c->bloques->map(fn ($g) => $this->grupoArray($g))->values(),
+        ];
     }
 
     /**
-     * POST /mesas/config/conjuntos y PUT /mesas/config/conjuntos/{id}: la tarjeta con sus bloques en
-     * orden y los productos que la llevan.
-     * {nombre, bloques: [{id?, nombre, minimo, maximo, opciones: [...]}], productos: [ids]}
+     * Guarda los bloques de una tarjeta en orden; los que ya no vienen se apagan (hay órdenes que
+     * citan sus opciones). Después copia los bloques al producto para la venta.
      */
-    public function guardarConjunto(Request $request, ?int $id = null)
+    private function guardarBloques(ConjuntoModificador $conjunto, array $bloques): void
     {
-        $conjunto = $id ? ConjuntoModificador::where('activo', true)->findOrFail($id) : null;
+        $conservados = [];
+        foreach ($bloques as $n => $b) {
+            $grupo = !empty($b['id']) ? GrupoModificador::where('conjunto_id', $conjunto->id)->find($b['id']) : null;
+            $minimo = (int) ($b['minimo'] ?? 0);
+            $campos = ['nombre' => $b['nombre'], 'minimo' => $minimo, 'maximo' => isset($b['maximo']) ? (int) $b['maximo'] : null,
+                'obligatorio' => $minimo > 0, 'multiple' => true, 'activo' => true, 'conjunto_id' => $conjunto->id, 'orden' => $n];
+            $grupo ? $grupo->update($campos) : $grupo = GrupoModificador::create($campos);
+            $this->guardarOpciones($grupo, $b['opciones']);
+            $conservados[] = $grupo->id;
+        }
+        GrupoModificador::where('conjunto_id', $conjunto->id)->whereNotIn('id', $conservados)->update(['activo' => false]);
+        $this->copiarBloquesAProductos($conjunto);
+    }
+
+    /** GET /mesas/config/productos/{id}/modificadores: los modificadores del producto (o null). */
+    public function modificadoresProducto(int $id)
+    {
+        Producto::findOrFail($id);
+        $conjunto = ConjuntoModificador::where('activo', true)
+            ->whereIn('id', DB::table('conjunto_producto')->where('producto_id', $id)->select('conjunto_id'))
+            ->with(['bloques', ...$this->conOpciones('bloques.'), 'productos:id,nombre'])->first();
+
+        return response()->json(['success' => 1, 'conjunto' => $conjunto ? $this->tarjetaArray($conjunto) : null]);
+    }
+
+    /**
+     * PUT /mesas/config/productos/{id}/modificadores {bloques: [{id?, nombre, minimo, maximo, opciones}]}:
+     * los modificadores propios del producto, en bloques. Solo cambian los de este producto.
+     */
+    public function guardarModificadoresProducto(Request $request, int $id)
+    {
+        $producto = Producto::findOrFail($id);
 
         $validator = validator($request->all(), [
-            'nombre'           => 'required|string|max:80',
             'bloques'          => 'required|array|min:1|max:15',
             'bloques.*.id'     => 'nullable|integer',
             'bloques.*.nombre' => 'required|string|max:80',
             'bloques.*.minimo' => 'nullable|integer|min:0|max:50',
             'bloques.*.maximo' => 'nullable|integer|min:1|max:50',
             ...$this->reglasOpciones('bloques.*.opciones'),
-            'productos'        => 'nullable|array',
-            'productos.*'      => 'integer|distinct|exists:productos,id',
         ], [
-            'nombre.required'           => 'Ponle un nombre a la tarjeta (ej. Bebidas con leche)',
             'bloques.required'          => 'Agrega al menos un bloque (ej. Tipo de leche)',
             'bloques.*.nombre.required' => 'Cada bloque necesita un nombre',
             'bloques.*.maximo.min'      => 'El máximo de un bloque debe ser al menos 1',
             ...$this->mensajesOpciones('bloques.*.opciones'),
         ]);
-        $validator->after(function ($v) use ($request, $id) {
+        $validator->after(function ($v) use ($request) {
             foreach ((array) $request->input('bloques', []) as $b) {
                 $this->validarBloque($v, (array) $b, '«' . ($b['nombre'] ?? 'Bloque') . '»');
-            }
-            // Un producto lleva una sola tarjeta
-            if ($otros = $this->productosConOtraTarjeta((array) $request->input('productos', []), $id)) {
-                $v->errors()->add('productos', 'Estos productos ya tienen otros modificadores: ' . implode(', ', $otros)
-                    . '. Quítalos de esa tarjeta primero.');
             }
         });
         if ($validator->fails()) {
@@ -427,57 +445,43 @@ class ConfigMesasApiController extends Controller
         }
         $datos = $validator->validated();
 
-        DB::transaction(function () use (&$conjunto, $datos) {
-            $conjunto ? $conjunto->update(['nombre' => $datos['nombre']]) : $conjunto = ConjuntoModificador::create(['nombre' => $datos['nombre']]);
-
-            $conservados = [];
-            foreach ($datos['bloques'] as $n => $b) {
-                $grupo = !empty($b['id']) ? GrupoModificador::where('conjunto_id', $conjunto->id)->find($b['id']) : null;
-                $minimo = (int) ($b['minimo'] ?? 0);
-                $campos = ['nombre' => $b['nombre'], 'minimo' => $minimo, 'maximo' => isset($b['maximo']) ? (int) $b['maximo'] : null,
-                    'obligatorio' => $minimo > 0, 'multiple' => true, 'activo' => true, 'conjunto_id' => $conjunto->id, 'orden' => $n];
-                $grupo ? $grupo->update($campos) : $grupo = GrupoModificador::create($campos);
-                $this->guardarOpciones($grupo, $b['opciones']);
-                $conservados[] = $grupo->id;
+        $conjunto = null;
+        DB::transaction(function () use ($producto, $datos, &$conjunto) {
+            $conjuntoId = DB::table('conjunto_producto')->where('producto_id', $producto->id)->value('conjunto_id');
+            $conjunto = $conjuntoId ? ConjuntoModificador::find($conjuntoId) : null;
+            if ($conjunto) {
+                $conjunto->update(['nombre' => mb_substr($producto->nombre, 0, 80), 'activo' => true]);
+            } else {
+                $conjunto = ConjuntoModificador::create(['nombre' => mb_substr($producto->nombre, 0, 80)]);
+                DB::table('conjunto_producto')->insert(['producto_id' => $producto->id, 'conjunto_id' => $conjunto->id]);
             }
-            // Bloques quitados de la tarjeta: se apagan (hay órdenes que citan sus opciones)
-            GrupoModificador::where('conjunto_id', $conjunto->id)->whereNotIn('id', $conservados)->update(['activo' => false]);
-
-            DB::table('conjunto_producto')->where('conjunto_id', $conjunto->id)->delete();
-            foreach ($datos['productos'] ?? [] as $productoId) {
-                DB::table('conjunto_producto')->insert(['producto_id' => $productoId, 'conjunto_id' => $conjunto->id]);
-            }
-            $this->copiarBloquesAProductos($conjunto);
+            $this->guardarBloques($conjunto, $datos['bloques']);
         });
 
-        AuditoriaService::registrar('mesas', 'guardar_modificadores', $conjunto, null, [
-            'tarjeta'   => $conjunto->nombre,
-            'bloques'   => collect($datos['bloques'])->map(fn ($b) => $b['nombre'] . ': ' . collect($b['opciones'])->pluck('nombre')->implode(', '))->all(),
-            'productos' => count($datos['productos'] ?? []),
-        ], $conjunto->nombre);
+        AuditoriaService::registrar('mesas', 'guardar_modificadores', $producto, null, [
+            'bloques' => collect($datos['bloques'])->map(fn ($b) => $b['nombre'] . ': ' . collect($b['opciones'])->pluck('nombre')->implode(', '))->all(),
+        ], $producto->nombre);
 
-        return response()->json(['success' => 1, 'id' => $conjunto->id, 'message' => "Modificadores «{$conjunto->nombre}» guardados"], $id ? 200 : 201);
+        return response()->json(['success' => 1, 'id' => $conjunto->id, 'message' => "Modificadores de «{$producto->nombre}» guardados"]);
     }
 
-    public function actualizarConjunto(Request $request, int $id)
+    /** DELETE /mesas/config/productos/{id}/modificadores: el producto queda sin modificadores. */
+    public function quitarModificadoresProducto(int $id)
     {
-        return $this->guardarConjunto($request, $id);
-    }
+        $producto = Producto::findOrFail($id);
+        $conjuntoId = DB::table('conjunto_producto')->where('producto_id', $producto->id)->value('conjunto_id');
 
-    /** DELETE /mesas/config/conjuntos/{id}: se apaga con sus bloques y sus productos quedan sin modificadores. */
-    public function borrarConjunto(int $id)
-    {
-        $conjunto = ConjuntoModificador::where('activo', true)->findOrFail($id);
-        DB::transaction(function () use ($conjunto) {
-            $grupos = GrupoModificador::where('conjunto_id', $conjunto->id)->pluck('id');
-            DB::table('producto_grupo_modificador')->whereIn('grupo_id', $grupos)->delete();
-            DB::table('conjunto_producto')->where('conjunto_id', $conjunto->id)->delete();
-            GrupoModificador::whereIn('id', $grupos)->update(['activo' => false]);
-            $conjunto->update(['activo' => false]);
+        DB::transaction(function () use ($producto, $conjuntoId) {
+            $producto->gruposModificadores()->sync([]);
+            DB::table('conjunto_producto')->where('producto_id', $producto->id)->delete();
+            if ($conjuntoId) {
+                GrupoModificador::where('conjunto_id', $conjuntoId)->update(['activo' => false]);
+                ConjuntoModificador::whereKey($conjuntoId)->update(['activo' => false]);
+            }
         });
-        AuditoriaService::registrar('mesas', 'borrar_modificadores', $conjunto, ['tarjeta' => $conjunto->nombre], null, $conjunto->nombre);
+        AuditoriaService::registrar('mesas', 'quitar_modificadores', $producto, ['conjunto_id' => $conjuntoId], null, $producto->nombre);
 
-        return response()->json(['success' => 1, 'message' => "Modificadores «{$conjunto->nombre}» borrados"]);
+        return response()->json(['success' => 1, 'message' => "«{$producto->nombre}» quedó sin modificadores"]);
     }
 
     /** Versión anterior de la app: un grupo suelto. Si es nuevo, queda como una tarjeta de un bloque. */
@@ -536,42 +540,5 @@ class ConfigMesasApiController extends Controller
     public function actualizarGrupo(Request $request, int $id)
     {
         return $this->guardarGrupo($request, $id);
-    }
-
-    // ── Tarjeta de un producto ────────────────────────────────
-
-    /** GET /mesas/config/productos/{id}/modificadores: la tarjeta que lleva (o null). */
-    public function conjuntoProducto(int $id)
-    {
-        Producto::findOrFail($id);
-
-        return response()->json(['success' => 1, 'conjunto_id' => DB::table('conjunto_producto')->where('producto_id', $id)->value('conjunto_id')]);
-    }
-
-    /**
-     * PUT /mesas/config/productos/{id}/modificadores {conjunto_id | null}: cambia la tarjeta del
-     * producto (sale de la que tenía) o se la quita.
-     */
-    public function asignarConjuntoProducto(Request $request, int $id)
-    {
-        $producto = Producto::findOrFail($id);
-        $datos = $request->validate(['conjunto_id' => ['nullable', 'integer', Rule::exists('conjuntos_modificadores', 'id')->where('activo', true)]]);
-        $nuevo = $datos['conjunto_id'] ?? null;
-        $antes = DB::table('conjunto_producto')->where('producto_id', $producto->id)->value('conjunto_id');
-
-        DB::transaction(function () use ($producto, $nuevo, $antes) {
-            DB::table('conjunto_producto')->where('producto_id', $producto->id)->delete();
-            $producto->gruposModificadores()->sync([]);
-            if ($antes) {
-                $this->copiarBloquesAProductos(ConjuntoModificador::find($antes));
-            }
-            if ($nuevo) {
-                DB::table('conjunto_producto')->insert(['producto_id' => $producto->id, 'conjunto_id' => $nuevo]);
-                $this->copiarBloquesAProductos(ConjuntoModificador::find($nuevo));
-            }
-        });
-        AuditoriaService::registrar('mesas', 'modificadores_producto', $producto, ['conjunto_id' => $antes], ['conjunto_id' => $nuevo], $producto->nombre);
-
-        return response()->json(['success' => 1, 'message' => $nuevo ? "Modificadores de «{$producto->nombre}» guardados" : "«{$producto->nombre}» quedó sin modificadores"]);
     }
 }

@@ -288,67 +288,57 @@ class RecetasVentaTest extends TestCase
         $this->assertSame([1, 2], [$grupo->fresh()->minimo, $grupo->fresh()->maximo]);
     }
 
-    public function test_tarjeta_de_modificadores_con_bloques_y_un_producto_lleva_una_sola(): void
+    public function test_cada_producto_tiene_sus_propios_modificadores_en_bloques(): void
     {
         $this->actuarComo('admin');
         $chocolate = $this->plato('Chocolate caliente', 1.75);
         $cafe = $this->plato('Café con leche', 1.50);
-        $tarjeta = fn (string $nombre, array $productos, array $extra = []) => [
-            'nombre' => $nombre, 'productos' => $productos, 'bloques' => [
-                ['nombre' => 'Tipo de leche', 'minimo' => 1, 'maximo' => 1, 'opciones' => [['nombre' => 'Entera'], ['nombre' => 'Deslactosada', 'precio' => 0.25]]],
-                ['nombre' => 'Azúcar', 'opciones' => [['nombre' => 'Sin azúcar'], ['nombre' => 'Normal'], ['nombre' => 'Extra azúcar']], 'maximo' => 1],
-                ['nombre' => 'Extras', 'opciones' => [['nombre' => 'Porción de leche', 'precio' => 0.35]]],
-                ...$extra,
-            ],
+        $bloques = [
+            ['nombre' => 'Tipo de leche', 'minimo' => 1, 'maximo' => 1, 'opciones' => [['nombre' => 'Entera'], ['nombre' => 'Deslactosada', 'precio' => 0.25]]],
+            ['nombre' => 'Azúcar', 'maximo' => 1, 'opciones' => [['nombre' => 'Sin azúcar'], ['nombre' => 'Normal'], ['nombre' => 'Extra azúcar']]],
+            ['nombre' => 'Extras', 'opciones' => [['nombre' => 'Porción de leche', 'precio' => 0.35]]],
         ];
+        $url = fn (Producto $p) => "/api/mesas/config/productos/{$p->id}/modificadores";
 
-        $id = $this->postJson('/api/mesas/config/conjuntos', $tarjeta('Bebidas con leche', [$chocolate->id, $cafe->id]))->assertCreated()->json('id');
+        $this->getJson($url($chocolate))->assertOk()->assertJsonPath('conjunto', null);
+        $this->putJson($url($chocolate), ['bloques' => $bloques])->assertOk();
+        // El café recibe una copia: los mismos bloques, pero suyos
+        $this->putJson($url($cafe), ['bloques' => $bloques])->assertOk();
+
         $config = $this->getJson('/api/mesas/config/modificadores')->assertOk();
-        $config->assertJsonPath('conjuntos.0.nombre', 'Bebidas con leche')
-            ->assertJsonPath('conjuntos.0.bloques.0.nombre', 'Tipo de leche')
-            ->assertJsonPath('conjuntos.0.bloques.2.nombre', 'Extras')
-            ->assertJsonPath('conjuntos.0.productos.0.nombre', 'Café con leche');
-        $this->assertSame($id, collect($config->json('productos'))->firstWhere('id', $chocolate->id)['conjunto_id']);
+        $this->assertSame(['Café con leche', 'Chocolate caliente'], collect($config->json('conjuntos'))->pluck('producto')->all());
+        $suyo = $this->getJson($url($chocolate))->assertJsonPath('conjunto.producto', 'Chocolate caliente')
+            ->assertJsonPath('conjunto.bloques.0.nombre', 'Tipo de leche')->json('conjunto');
 
         // La venta ve los tres bloques en orden y aplica el mínimo del primero
-        $bloques = collect($config->json('conjuntos.0.bloques'))->pluck('id')->all();
-        $catalogo = collect($this->getJson('/api/pos/catalogo')->json('productos'))->firstWhere('id', $chocolate->id);
-        $this->assertSame($bloques, $catalogo['grupos']);
-        $opcion = fn (string $n) => \App\Models\Modificador::where('nombre', $n)->value('id');
+        $ids = collect($suyo['bloques'])->pluck('id')->all();
+        $this->assertSame($ids, collect($this->getJson('/api/pos/catalogo')->json('productos'))->firstWhere('id', $chocolate->id)['grupos']);
+        $opcion = fn (string $n) => collect($suyo['bloques'])->flatMap(fn ($b) => $b['opciones'])->firstWhere('nombre', $n)['id'];
         $vender = fn (array $mods) => $this->postJson('/api/pos/ventas', ['uuid' => (string) Str::uuid(), 'caja_id' => $this->caja->id,
             'items' => [['producto_id' => $chocolate->id, 'cantidad' => 1, 'modificadores' => $mods]],
             'pagos' => [['metodo_pago_id' => MetodoPago::where('nombre', 'Efectivo')->value('id'), 'monto' => 5]]]);
         $vender([$opcion('Normal')])->assertStatus(422);
         $vender([$opcion('Deslactosada'), $opcion('Normal'), $opcion('Porción de leche')])->assertCreated()->assertJsonPath('venta.total', 2.35);
 
-        // Otra tarjeta no puede llevar un producto que ya tiene una
-        $this->postJson('/api/mesas/config/conjuntos', $tarjeta('Otra', [$chocolate->id]))->assertStatus(422)
-            ->assertJsonFragment(['message' => 'Estos productos ya tienen otros modificadores: Chocolate caliente (ya lleva «Bebidas con leche»). Quítalos de esa tarjeta primero.']);
-
-        // Quitar un bloque y un producto de la tarjeta
-        $datos = $tarjeta('Bebidas con leche', [$cafe->id]);
-        $datos['bloques'] = collect($config->json('conjuntos.0.bloques'))->take(2)->map(fn ($b) => [
+        // Quitar una opción y un bloque al chocolate no toca al café
+        $editados = collect($suyo['bloques'])->take(2)->map(fn ($b) => [
             'id' => $b['id'], 'nombre' => $b['nombre'], 'minimo' => $b['minimo'], 'maximo' => $b['maximo'],
-            'opciones' => collect($b['opciones'])->map(fn ($o) => ['id' => $o['id'], 'nombre' => $o['nombre'], 'precio' => $o['precio']])->all(),
+            'opciones' => collect($b['opciones'])->reject(fn ($o) => $o['nombre'] === 'Extra azúcar')
+                ->map(fn ($o) => ['id' => $o['id'], 'nombre' => $o['nombre'], 'precio' => $o['precio']])->values()->all(),
         ])->all();
-        $this->putJson("/api/mesas/config/conjuntos/{$id}", $datos)->assertOk();
-        $this->assertSame(array_slice($bloques, 0, 2), $cafe->gruposModificadores()->pluck('grupos_modificadores.id')->all());
-        $this->assertSame([], $chocolate->gruposModificadores()->pluck('grupos_modificadores.id')->all());
+        $this->putJson($url($chocolate), ['bloques' => $editados])->assertOk();
+        $this->assertSame(array_slice($ids, 0, 2), $chocolate->gruposModificadores()->pluck('grupos_modificadores.id')->all());
+        $this->assertCount(3, $cafe->gruposModificadores()->get());
+        $this->getJson($url($cafe))->assertJsonPath('conjunto.bloques.1.opciones.2.nombre', 'Extra azúcar');
 
-        // Desde el producto: se le pone la tarjeta (o se le quita)
-        $this->getJson("/api/mesas/config/productos/{$chocolate->id}/modificadores")->assertJsonPath('conjunto_id', null);
-        $this->putJson("/api/mesas/config/productos/{$chocolate->id}/modificadores", ['conjunto_id' => $id])->assertOk();
-        $this->assertSame(array_slice($bloques, 0, 2), $chocolate->gruposModificadores()->pluck('grupos_modificadores.id')->all());
-        $this->putJson("/api/mesas/config/productos/{$chocolate->id}/modificadores", ['conjunto_id' => null])->assertOk();
+        // Quitar los modificadores de un producto
+        $this->deleteJson($url($chocolate))->assertOk();
         $this->assertSame([], $chocolate->gruposModificadores()->pluck('grupos_modificadores.id')->all());
-
-        // Borrar la tarjeta deja a sus productos sin modificadores
-        $this->deleteJson("/api/mesas/config/conjuntos/{$id}")->assertOk();
-        $this->assertSame([], $cafe->gruposModificadores()->pluck('grupos_modificadores.id')->all());
-        $this->getJson('/api/mesas/config/modificadores')->assertJsonPath('conjuntos', []);
+        $this->getJson($url($chocolate))->assertJsonPath('conjunto', null);
+        $this->assertCount(3, $cafe->gruposModificadores()->get());
 
         $this->actuarComo('mesero');
-        $this->postJson('/api/mesas/config/conjuntos', $tarjeta('X', []))->assertForbidden();
+        $this->putJson($url($cafe), ['bloques' => $bloques])->assertForbidden();
     }
 
     public function test_ingrediente_comprado_por_libra_se_ajusta_en_gramos(): void

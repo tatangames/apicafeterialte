@@ -251,14 +251,81 @@ class ProductosApiController extends Controller
         return response()->json(['success' => 1, 'message' => 'Orden del POS guardado']);
     }
 
+    // Dónde puede aparecer un producto. Con cualquiera de estos ya no se borra (queda historial
+    // o configuración que lo usa); categorías, extras asignados, stock en 0 y avisos se van con él
+    private const USOS_PRODUCTO = [
+        'movimientos_inventario'      => 'movimiento(s) de inventario',
+        'entradas_inventario_detalle' => 'entrada(s) de inventario',
+        'ventas_detalle'              => 'venta(s)',
+        'devoluciones_detalle'        => 'devolución(es)',
+        'pedidos_detalle'             => 'pedido(s)',
+        'ordenes_items'               => 'consumo(s) en mesas',
+        'compras_detalle'             => 'compra(s)',
+        'ordenes_compra_detalle'      => 'orden(es) de compra',
+        'recetas'                     => 'receta(s) propia(s)',
+        'recetas_ingredientes'        => 'receta(s) donde es ingrediente',
+        'producciones'                => 'producción(es)',
+        'producciones_consumos'       => 'consumo(s) de producción',
+        'mermas'                      => 'merma(s)',
+        'modificadores'               => 'extra(s) que lo descuentan',
+    ];
+
+    private function usosProducto(int $id): array
+    {
+        $usos = [];
+        foreach (self::USOS_PRODUCTO as $tabla => $texto) {
+            if ($n = DB::table($tabla)->where('producto_id', $id)->count()) {
+                $usos[] = "{$n} {$texto}";
+            }
+        }
+        return $usos;
+    }
+
+    // DELETE /productos/{id}: solo si nunca se usó (si no, se desactiva)
+    public function borrarProducto(int $id)
+    {
+        $producto = Producto::with('categorias')->find($id);
+        if (!$producto) {
+            return response()->json(['success' => 0, 'message' => 'El producto no existe'], 404);
+        }
+
+        $usos = $this->usosProducto($producto->id);
+        $stock = (float) (Inventario::where('producto_id', $producto->id)->value('stock_actual') ?? 0);
+        if ($usos || abs($stock) > 0.0001) {
+            $detalle = $usos ? 'aparece en ' . implode(', ', $usos) : 'tiene existencia';
+            return response()->json([
+                'success' => 0,
+                'status'  => 'BUSINESS_RULE',
+                'message' => "No se puede borrar «{$producto->nombre}»: {$detalle}. Desactívalo en su lugar.",
+            ], 422);
+        }
+
+        $antes = $producto->toArray() + ['categorias' => $producto->categorias->pluck('nombre')->all()];
+        // Nunca se usó: se borra de verdad (libera el SKU y el código de barras); categorías,
+        // stock en 0, extras asignados y avisos se van por cascada
+        DB::transaction(fn () => $producto->forceDelete());
+        if ($producto->imagen && Storage::disk('archivos')->exists($producto->imagen)) {
+            Storage::disk('archivos')->delete($producto->imagen);
+        }
+        AuditoriaService::registrar('productos', 'borrar', $producto, $antes, null, $producto->nombre);
+
+        return response()->json(['success' => 1, 'message' => 'Producto borrado']);
+    }
+
     public function tablaProductos()
     {
         try {
+            // usado: con true el botón Borrar no aparece
+            $usados = collect(array_keys(self::USOS_PRODUCTO))
+                ->flatMap(fn ($t) => DB::table($t)->whereNotNull('producto_id')->distinct()->pluck('producto_id'))
+                ->unique()->flip();
+
             $productos = Producto::with(['unidadMedida', 'categorias', 'inventario'])
                 ->orderByDesc('id')
                 ->get()
-                ->map(function ($producto) {
+                ->map(function ($producto) use ($usados) {
                     return [
+                        'usado'          => $usados->has($producto->id) || abs((float) ($producto->inventario->stock_actual ?? 0)) > 0.0001,
                         'id'             => $producto->id,
                         'sku'            => $producto->sku,
                         'codigo_barras'  => $producto->codigo_barras,

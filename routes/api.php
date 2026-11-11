@@ -192,6 +192,7 @@ Route::middleware(['auth:sanctum', 'usuario.activo'])->group(function () {
         Route::post('/productos/registro', [ProductosApiController::class, 'registrarProducto']);
         Route::post('/productos/actualizar/{id}', [ProductosApiController::class, 'actualizarProducto']);
         Route::put('/productos/orden-pos', [ProductosApiController::class, 'ordenarPos']);
+        Route::delete('/productos/{id}', [ProductosApiController::class, 'borrarProducto'])->whereNumber('id');
     });
 
     // ── INVENTARIO ────────────────────────────────────────────

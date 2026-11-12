@@ -59,6 +59,23 @@ class ClienteApiController extends Controller
         ];
     }
 
+    /**
+     * Límite de crédito vacío = sin crédito (0). Días de crédito y estado vacíos no se tocan (al crear
+     * quedan los de la base: 30 días, activo). Esas columnas no aceptan null y la tablet manda vacíos.
+     */
+    private static function sinNulos(array $datos): array
+    {
+        if (array_key_exists('limite_credito', $datos) && $datos['limite_credito'] === null) {
+            $datos['limite_credito'] = 0;
+        }
+        foreach (['dias_credito', 'activo'] as $campo) {
+            if (array_key_exists($campo, $datos) && $datos[$campo] === null) {
+                unset($datos[$campo]);
+            }
+        }
+        return $datos;
+    }
+
     private function mensajes(): array
     {
         return [
@@ -115,7 +132,8 @@ class ClienteApiController extends Controller
             unset($datos['limite_credito'], $datos['dias_credito']);
         }
 
-        $cliente = Cliente::create([...$datos, 'activo' => $datos['activo'] ?? true]);
+        // refresh: trae los valores por defecto de la base (días de crédito)
+        $cliente = Cliente::create([...self::sinNulos($datos), 'activo' => $datos['activo'] ?? true])->refresh();
         AuditoriaService::registrar('clientes', 'crear', $cliente, null, self::formato($cliente), "Cliente {$cliente->nombre}");
 
         return response()->json([
@@ -139,7 +157,7 @@ class ClienteApiController extends Controller
         }
 
         $antes = self::formato($cliente);
-        $cliente->update($datos);
+        $cliente->update(self::sinNulos($datos));
         AuditoriaService::registrar('clientes', 'editar', $cliente, $antes, self::formato($cliente), "Cliente {$cliente->nombre}");
 
         return response()->json([

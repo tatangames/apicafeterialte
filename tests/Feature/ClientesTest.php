@@ -108,6 +108,21 @@ class ClientesTest extends TestCase
         $this->assertDatabaseHas('auditorias', ['modulo' => 'clientes', 'accion' => 'editar']);
     }
 
+    public function test_cliente_solo_con_nombre_como_lo_manda_la_tablet(): void
+    {
+        $this->actuarComo('admin');
+
+        // La tablet manda null en todo lo que queda vacío
+        $vacio = ['documento' => null, 'telefono' => null, 'correo' => null, 'direccion' => null,
+            'limite_credito' => null, 'dias_credito' => null, 'notas' => null, 'activo' => null];
+        $id = $this->postJson('/api/clientes', ['nombre' => 'Juan Pérez', ...$vacio])
+            ->assertCreated()->assertJsonPath('cliente.limite_credito', 0)->assertJsonPath('cliente.dias_credito', 30)
+            ->json('cliente.id');
+
+        $this->putJson("/api/clientes/{$id}", ['nombre' => 'Juan Pérez López', ...$vacio])
+            ->assertOk()->assertJsonPath('cliente.nombre', 'Juan Pérez López')->assertJsonPath('cliente.dias_credito', 30);
+    }
+
     public function test_sin_permiso_de_cuentas_no_se_asigna_credito(): void
     {
         $this->actuarComo('editor')->givePermissionTo('clientes.gestionar');

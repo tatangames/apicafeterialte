@@ -723,6 +723,9 @@ class MesasTest extends TestCase
         $this->assertNotNull($pan->fresh()->area_preparacion_id);
 
         $this->postJson('/api/mesas/config/terminales', ['nombre' => 'TERRAZA 1', 'tipo' => 'mesa', 'zona' => 'Terraza', 'capacidad' => 6])->assertCreated();
+        // La tablet manda la capacidad vacía como null: queda la de la base (4)
+        $this->postJson('/api/mesas/config/terminales', ['nombre' => 'TERRAZA 2', 'tipo' => 'mesa', 'zona' => 'Terraza', 'capacidad' => null])->assertCreated();
+        $this->assertSame(4, (int) \App\Models\Terminal::where('nombre', 'TERRAZA 2')->value('capacidad'));
         $this->getJson('/api/mesas/config/terminales')->assertJsonFragment(['zonas' => ['Mostrador', 'Salón', 'Terraza']]);
 
         $this->actuarComo('cajero');

@@ -67,6 +67,11 @@ class ConfigMesasApiController extends Controller
             return response()->json(['success' => 0, 'message' => 'La terminal tiene una orden abierta: ciérrala antes de desactivarla'], 422);
         }
 
+        // Capacidad vacía (la tablet la manda null): no se toca; una mesa nueva queda con la de la base (4)
+        if (array_key_exists('capacidad', $datos) && $datos['capacidad'] === null) {
+            unset($datos['capacidad']);
+        }
+
         $antes = $terminal?->toArray();
         // La posición se cambia arrastrando las filas: una terminal nueva va al final
         $terminal ? $terminal->update($datos) : $terminal = Terminal::create([

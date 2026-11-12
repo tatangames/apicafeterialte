@@ -102,6 +102,10 @@ class RecetasVentaTest extends TestCase
         $alcanza = fn (string $ruta) => collect($this->getJson($ruta)->assertOk()->json('productos'))->firstWhere('id', $this->limonada->id)['alcanza'];
         $this->assertEquals(7, $alcanza('/api/pos/catalogo'));
         $this->assertEquals(7, $alcanza('/api/mesas/catalogo'));
+        // Un insumo con «Permitir vender sin existencia» no limita: queda el azúcar (166)
+        $this->limon->update(['permite_sin_existencia' => true]);
+        $this->assertEquals(166, $alcanza('/api/pos/catalogo'));
+        $this->limon->update(['permite_sin_existencia' => false]);
 
         // 2 limonadas en una mesa abierta apartan 8 limones: quedan 22, alcanzan 5
         $this->seed(\Database\Seeders\CajaSeeder::class);

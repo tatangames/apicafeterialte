@@ -205,6 +205,10 @@ class MesasTest extends TestCase
         Inventario::where('producto_id', $leche->id)->update(['stock_actual' => 100]);
         $this->assertTrue($agotada()[$this->op['entera']]['agotado']);
         $this->assertFalse($agotada()[$this->op['deslactosada']]['agotado']);
+        // Si la leche se vende sin existencia, la opción nunca sale agotada
+        $leche->update(['permite_sin_existencia' => true]);
+        $this->assertFalse($agotada()[$this->op['entera']]['agotado']);
+        $leche->update(['permite_sin_existencia' => false]);
         Inventario::where('producto_id', $leche->id)->update(['stock_actual' => 300]);
 
         // Era deslactosada: se cambia el extra sin borrar la línea y el precio se recalcula

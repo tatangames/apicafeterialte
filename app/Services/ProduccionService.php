@@ -175,7 +175,14 @@ class ProduccionService
     public static function alcanza(Receta $receta, array $stock, array $apartado = []): ?float
     {
         $alcanza = null;
-        foreach (self::consumoDeVenta($receta, 1) as $i) {
+        // Un insumo con «Permitir vender sin existencia» (Coca-Cola) no limita: se descuenta aunque quede en negativo
+        $consumo = self::consumoDeVenta($receta, 1); // carga los ingredientes con su producto
+        $sinLimite = $receta->ingredientes->filter(fn (RecetaIngrediente $i) => $i->producto?->permite_sin_existencia)
+            ->pluck('producto_id')->flip();
+        foreach ($consumo as $i) {
+            if ($sinLimite->has($i['producto_id'])) {
+                continue;
+            }
             $hay = max(0, (float) ($stock[$i['producto_id']] ?? 0) - (float) ($apartado[$i['producto_id']] ?? 0));
             $n = floor($hay / $i['cantidad'] + 0.000001);
             $alcanza = $alcanza === null ? $n : min($alcanza, $n);

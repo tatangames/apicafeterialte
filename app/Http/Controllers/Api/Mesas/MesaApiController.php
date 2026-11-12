@@ -250,8 +250,13 @@ class MesaApiController extends Controller
             return collect();
         }
         $stock = Inventario::whereIn('producto_id', $opciones->pluck('producto_id'))->pluck('stock_actual', 'producto_id');
+        // Insumos con «Permitir vender sin existencia» (la Coca-Cola de Soda): la opción se elige aunque marque 0
+        $sinLimite = Producto::whereIn('id', $opciones->pluck('producto_id'))->where('permite_sin_existencia', true)->pluck('id')->flip();
 
-        return $opciones->filter(function ($o) use ($stock) {
+        return $opciones->filter(function ($o) use ($stock, $sinLimite) {
+            if ($sinLimite->has($o->producto_id)) {
+                return false;
+            }
             $porcion = VentaService::consumoDeModificadores([$o->id], 1)[0]['cantidad'] ?? 0;
             return $porcion > 0 && (float) ($stock[$o->producto_id] ?? 0) < $porcion - 0.0001;
         })->pluck('id')->values();

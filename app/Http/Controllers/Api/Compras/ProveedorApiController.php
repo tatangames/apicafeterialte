@@ -42,6 +42,15 @@ class ProveedorApiController extends Controller
         ];
     }
 
+    /** Días de crédito vacío = de contado (0): la columna no acepta null y la tablet lo manda vacío. */
+    private static function datos(array $validados): array
+    {
+        if (array_key_exists('dias_credito', $validados) && $validados['dias_credito'] === null) {
+            $validados['dias_credito'] = 0;
+        }
+        return $validados;
+    }
+
     private function reglas(?Proveedor $proveedor = null): array
     {
         return [
@@ -100,7 +109,7 @@ class ProveedorApiController extends Controller
             return $this->errorValidacion($validator);
         }
 
-        $proveedor = Proveedor::create([...$validator->validated(), 'activo' => $request->boolean('activo', true)]);
+        $proveedor = Proveedor::create([...self::datos($validator->validated()), 'activo' => $request->boolean('activo', true)]);
         AuditoriaService::registrar('compras', 'crear_proveedor', $proveedor, null, self::formato($proveedor), "Proveedor {$proveedor->nombre}");
 
         return response()->json(['success' => 1, 'message' => "Proveedor {$proveedor->nombre} registrado", 'proveedor' => self::formato($proveedor)], 201);
@@ -115,7 +124,7 @@ class ProveedorApiController extends Controller
         }
 
         $antes = self::formato($proveedor);
-        $proveedor->update($validator->validated());
+        $proveedor->update(self::datos($validator->validated()));
         AuditoriaService::registrar('compras', 'editar_proveedor', $proveedor, $antes, self::formato($proveedor), "Proveedor {$proveedor->nombre}");
 
         return response()->json(['success' => 1, 'message' => 'Proveedor actualizado', 'proveedor' => self::formato($proveedor)]);

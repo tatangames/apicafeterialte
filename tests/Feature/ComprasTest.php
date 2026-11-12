@@ -104,6 +104,20 @@ class ComprasTest extends TestCase
         $this->getJson('/api/compras/proveedores?buscar=Carlos')->assertJsonPath('proveedores.0.nombre', 'Distribuidora La Fe');
     }
 
+    public function test_proveedor_con_campos_vacios_como_lo_manda_la_tablet(): void
+    {
+        $this->actuarComo('encargado_inventario');
+
+        // La tablet manda null en todo lo que se deja vacío; días de crédito vacío = de contado
+        $vacio = ['nit' => null, 'nrc' => null, 'contacto' => null, 'telefono' => null, 'correo' => null,
+            'direccion' => null, 'dias_credito' => null, 'notas' => null, 'activo' => true];
+        $id = $this->postJson('/api/compras/proveedores', ['nombre' => 'Supermercado', ...$vacio])
+            ->assertCreated()->assertJsonPath('proveedor.dias_credito', 0)->json('proveedor.id');
+
+        $this->putJson("/api/compras/proveedores/{$id}", ['nombre' => 'Supermercado La Colonia', ...$vacio])
+            ->assertOk()->assertJsonPath('proveedor.dias_credito', 0);
+    }
+
     // ── Compras ───────────────────────────────────────────────
 
     public function test_compra_al_credito_convierte_unidades_y_recalcula_costo(): void

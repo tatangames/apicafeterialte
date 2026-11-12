@@ -24,7 +24,10 @@ class NegocioApiController extends Controller
     // POST /configuracion/negocio (multipart, por el logo)
     public function actualizar(Request $request)
     {
-        $validator = validator($request->all(), [
+        // El logo solo se valida si viene un archivo: la tablet manda los datos que leyó (con el
+        // nombre del logo actual como texto) y eso no es cambiar el logo
+        $entrada = $request->hasFile('logo') ? $request->all() : $request->except('logo');
+        $validator = validator($entrada, [
             'nombre'                  => 'required|string|max:200',
             'razon_social'            => 'nullable|string|max:200',
             'nit'                     => 'nullable|string|max:30',

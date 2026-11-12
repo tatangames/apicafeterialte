@@ -53,6 +53,20 @@ class FundamentosTest extends TestCase
         $this->assertDatabaseHas('auditorias', ['modulo' => 'configuracion', 'accion' => 'actualizar']);
     }
 
+    public function test_guardar_negocio_desde_la_tablet_sin_cambiar_el_logo(): void
+    {
+        $this->actuarComo('admin');
+        \App\Models\ConfiguracionNegocio::actual()->update(['logo' => 'logo_actual.png']);
+
+        // La tablet manda lo que leyó, con el nombre del logo como texto: no es un cambio de logo
+        $this->postJson('/api/configuracion/negocio', [
+            'nombre' => 'Panadería Eduardo', 'telefono' => '2222-1111', 'logo' => 'logo_actual.png',
+            'moneda' => 'USD', 'simbolo_moneda' => '$', 'permitir_stock_negativo' => false, 'descuento_max_sin_autorizacion' => 10,
+        ])->assertOk();
+
+        $this->assertDatabaseHas('configuracion_negocio', ['telefono' => '2222-1111', 'logo' => 'logo_actual.png']);
+    }
+
     public function test_autoriza_quien_tiene_el_permiso_o_su_pin(): void
     {
         $mesero = $this->crearUsuario('mesero');

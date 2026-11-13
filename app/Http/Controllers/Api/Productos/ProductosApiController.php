@@ -13,6 +13,7 @@ use Illuminate\Validation\Rule;
 use App\Models\Inventario;
 use App\Services\AuditoriaService;
 use App\Services\InventarioService;
+use App\Services\NotificacionService;
 use Illuminate\Support\Facades\Log;
 
 class ProductosApiController extends Controller
@@ -476,9 +477,12 @@ class ProductosApiController extends Controller
                 );
             }
 
+            // 5) Si ahora se vende sin existencia, sus avisos de agotado/negativo ya no aplican
+            NotificacionService::descartarAgotado($producto);
+
             DB::commit();
 
-            // 5) Borrar imagen anterior solo si se reemplazó correctamente
+            // 6) Borrar imagen anterior solo si se reemplazó correctamente
             if ($request->hasFile('imagen') && $imagenAnterior && Storage::disk('archivos')->exists($imagenAnterior)) {
                 Storage::disk('archivos')->delete($imagenAnterior);
             }

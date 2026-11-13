@@ -219,6 +219,10 @@ class InventarioService
             ->where(fn ($q) => $q->where('inventario.stock_actual', '<', 0)
                 ->orWhere(fn ($w) => $w->where('inventario.stock_minimo', '>', 0)
                     ->whereColumn('inventario.stock_actual', '<=', 'inventario.stock_minimo')))
+            // «Permitir vender sin existencia» (Coca-Cola): en 0 o negativo es a propósito, no se lista;
+            // si tiene mínimo y aún queda existencia, sí aparece al llegar a él
+            ->where(fn ($q) => $q->where('productos.permite_sin_existencia', false)
+                ->orWhere('inventario.stock_actual', '>', 0))
             ->orderByRaw('inventario.stock_actual - inventario.stock_minimo')
             ->get([
                 'productos.id as producto_id',

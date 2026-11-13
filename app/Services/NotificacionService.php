@@ -38,7 +38,7 @@ class NotificacionService
             default                                 => null,
         };
 
-        if ($tipo === null) {
+        if ($tipo === null || self::agotadoSinAviso($producto, $stockActual)) {
             return;
         }
 
@@ -87,6 +87,9 @@ class NotificacionService
         foreach ($productos as $producto) {
             $stock  = (float) $producto->inventario->stock_actual;
             $minimo = (float) $producto->inventario->stock_minimo;
+            if (self::agotadoSinAviso($producto, $stock)) {
+                continue;
+            }
 
             foreach (self::destinatariosStock() as $usuario) {
                 $tiene = Notificacion::where('usuario_id', $usuario->id)
@@ -113,6 +116,33 @@ class NotificacionService
         }
 
         return $creadas;
+    }
+
+    /**
+     * Un producto marcado «Permitir vender sin existencia» (Coca-Cola, golosinas) se vende
+     * aunque marque 0 y queda en negativo a propósito: no se avisa que se agotó ni que quedó
+     * en negativo. Si tiene mínimo, sí avisa al llegar a él mientras aún queda existencia.
+     */
+    private static function agotadoSinAviso(Producto $producto, float $stock): bool
+    {
+        return $producto->permite_sin_existencia && $stock <= 0;
+    }
+
+    /**
+     * Al marcar un producto «Permitir vender sin existencia» se borran sus avisos sin ver
+     * de agotado o negativo, que ya no aplican.
+     */
+    public static function descartarAgotado(Producto $producto): void
+    {
+        $stock = (float) ($producto->inventario?->stock_actual ?? 0);
+        if (!self::agotadoSinAviso($producto, $stock)) {
+            return;
+        }
+
+        Notificacion::where('producto_id', $producto->id)
+            ->whereIn('tipo', ['stock_bajo', 'stock_negativo'])
+            ->noLeidas()
+            ->delete();
     }
 
     /**

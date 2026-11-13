@@ -8,6 +8,7 @@ Avisos guardados por usuario (tabla `notificaciones`). Reemplazan a la campana q
 - **stock_negativo**: un producto pasa de 0 o más a negativo.
 - Subir el stock mínimo de un producto también puede crear el aviso.
 - Si el usuario ya tiene un aviso sin ver del mismo producto, se actualiza en vez de duplicarlo.
+- Productos con **«Permitir vender sin existencia»** (Coca-Cola, golosinas): no avisan que se agotaron ni que quedaron en negativo, porque se venden así a propósito. Si tienen stock mínimo, sí avisan al llegar a él mientras aún queda existencia. Al marcar la casilla en un producto se borran sus avisos sin ver de agotado/negativo (`NotificacionService::descartarAgotado`). La misma regla aplica a la lista «POR COMPRAR» del cierre/apertura de turno y a `GET /inventario/alertas` (`InventarioService::productosEnAlerta`).
 
 Lo dispara `InventarioService::aplicarMovimiento` (ventas, compras, producción, entradas y ajustes) llamando a `NotificacionService::revisarStock`. Lo reciben los usuarios activos con `inventario.ver` o `productos.gestionar`, y el admin.
 

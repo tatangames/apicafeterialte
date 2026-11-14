@@ -841,7 +841,7 @@ class ImpresionService
     private static function transmitir(TrabajoImpresion $trabajo, Impresora $impresora, string $bytes): void
     {
         // Servidor en la nube: no llega a la red del local. El trabajo queda en la cola y lo
-        // imprime la tablet que tiene activado «Esta tablet imprime» (ver tomarCola).
+        // la imprime la primera tablet que revise la cola (ver tomarCola).
         if ($impresora->conexion === 'dispositivo') {
             $trabajo->estado = 'pendiente';
             $trabajo->error = null;

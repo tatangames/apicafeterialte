@@ -181,7 +181,7 @@ El servidor en la nube no llega a la red del local (`192.168.1.69`). Por eso:
    EAS entrega un enlace para descargar el `.apk` e instalarlo en la tablet. Hay que permitir «instalar apps desconocidas».
 3. **Configurar la tablet:**
    - En la pantalla del servidor escribe `https://pos.tudominio.com`.
-   - En Ajustes → Impresoras activa **«Esta tablet imprime»**. Hazlo solo en la tablet que está en el Wi-Fi del local.
+   - En Ajustes → Impresoras **«Esta tablet imprime»** viene encendido; apágalo en la tablet que salga del Wi-Fi del local.
 4. **Probar** con «Imprimir prueba» y «Prueba producción»: deben salir en 3 segundos o menos.
 
 **Cómo funciona:**

@@ -72,7 +72,7 @@ El respaldo de lo que había antes está en `storage/app/respaldos/antes_de_borr
 | Predeterminada | Sí |
 
 - **Probar:** toca **Imprimir prueba** y **Prueba producción**.
-- **Con «Desde la tablet»:** en la tablet del local entra a **Ajustes → Impresoras** y activa **«Esta tablet imprime»**.
+- **Con «Desde la tablet»:** **«Esta tablet imprime»** (Ajustes → Impresoras) viene encendido en todas las tablets; apágalo solo en la que salga del Wi-Fi del local.
 - **Cuándo se abre el cajón:** solo al cobrar con efectivo, o con **Abrir cajón** en Caja.
 
 ### Paso 5. Mesas, áreas y cocina
